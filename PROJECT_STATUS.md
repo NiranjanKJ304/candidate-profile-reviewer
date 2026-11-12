@@ -1,16 +1,37 @@
 # Project Status
 
 **Project:** AI-Powered Multi-Platform Candidate Intelligence and Recruitment Evaluation System
-**Last updated:** 2026-11-12
+**Last updated:** 2026-11-13
 
 | Phase | Status |
 |---|---|
 | Phase 0: Foundation | ✅ Complete and verified |
-| Phase 1A: Resume Parsing Engine | 🟡 **Implemented, not complete.** Works live up to the LLM call; the real Groq call has not run (no `GROQ_API_KEY`) |
-| **Phase 1B: Job Description Parsing Engine** | 🟡 **Implemented, not complete.** Upload, extraction and storage work live (TXT, PDF, scanned PDF via OCR, DOCX); the real Groq structuring call has **not run**, because no `GROQ_API_KEY` is configured |
-| Phase 2+ (GitHub/LeetCode collectors, matching, scoring) | ⚪ Not started |
+| Phase 1A: Resume Parsing Engine | 🟡 Implemented, not complete: the real Groq call has not run (no `GROQ_API_KEY`) |
+| Phase 1B: Job Description Parsing Engine | 🟡 Implemented, not complete: same single blocker (no `GROQ_API_KEY`) |
+| Phase 2: GitHub Developer Profile Integration | ✅ Complete and verified (real GitHub API) |
+| Phase 3: Codeforces Developer Profile Integration | ✅ Complete and verified (real Codeforces API) |
+| **Phase 4: LeetCode Feasibility and Safe Implementation** | ✅ **Complete and verified as a manual, self-reported evidence workflow.** No LeetCode API is used, because no official or permitted one exists |
+| Phase 5+ (other platforms, aggregation, scoring, reports) | ⚪ Not started |
 
-Both 1A and 1B are blocked on the **same single step**: adding a Groq API key and running one real parse (instructions below).
+---
+
+## LeetCode integration type
+
+| Type | Applies? |
+|---|---|
+| Official API based | ❌ No: LeetCode publishes no official public API |
+| Authorized integration based | ❌ No: no developer program, OAuth or partner integration exists |
+| **Manual candidate-submitted evidence** | ✅ **Yes: the only mode implemented. Labelled self-reported and not verified** |
+| Unavailable (automated collection) | ✅ Platform data is reported as `unavailable`, with the reason and sources |
+
+**Feasibility findings (2026-11-13; primary sources read directly):**
+
+1. No official, documented public API, developer program or OAuth integration exists for reading LeetCode profiles or submissions.
+2. The [LeetCode Terms of Service](https://leetcode.com/terms/) ("Last modified: 04/05/2024", *USE OF SERVICES - Restrictions*) say that crawling, scraping or spidering any part of the Service, and reverse engineering it, are "strictly forbidden".
+3. [leetcode.com/robots.txt](https://leetcode.com/robots.txt) disallows `/graphql`, `/api/` and `/submissions` for all user agents.
+4. Third-party libraries call LeetCode's internal, undocumented GraphQL endpoint, often with session cookies. That is not a supported API, and using it would conflict with points 2 and 3.
+
+**So this system never contacts LeetCode.** There is no sync and no retry, no cookies, and no passwords. It doesn't even check that a username exists.
 
 ---
 
@@ -18,93 +39,66 @@ Both 1A and 1B are blocked on the **same single step**: adding a Groq API key an
 
 | Area | Status |
 |---|---|
-| Backend (FastAPI, Python 3.12) | ✅ Health, capabilities, candidate, resume and **job-description** APIs |
-| Database (PostgreSQL 18, local) | ✅ `candidate_intel` at **`0003_job_description_parsing` (head)**, no drift (`alembic check`) |
-| Redis (Memurai 8.2) | ✅ Connected |
-| OCR (Tesseract 5.4.0) | ✅ Scanned resumes and JDs verified live |
-| LLM (Groq) | 🔴 **Not configured**: `GROQ_API_KEY` is empty in `backend/.env` |
-| Frontend (Next.js 16) | ✅ `/resumes` and **`/job-descriptions`** (upload, status, required vs preferred skills, review and correct) |
-| Automated tests | ✅ **678 passing**: backend 484 unit + 70 live (2 real-provider tests skipped, no key), frontend 124 |
+| Backend (FastAPI, Python 3.12) | ✅ Health, capabilities, candidates, resumes, JDs, GitHub, Codeforces, **LeetCode (manual)** |
+| Database (PostgreSQL 18, local) | ✅ `candidate_intel` at **`0005_self_reported_evidence` (head)**, applied 2026-11-13, no drift |
+| Platform APIs | GitHub ✅ · Codeforces ✅ · LeetCode: none (by design) |
+| LLM (Groq) | 🔴 Not configured (blocks 1A and 1B completion only) |
+| Frontend (Next.js 16) | ✅ `/candidates` and the resume view now show GitHub, Codeforces and **LeetCode** sections |
+| Automated tests | ✅ **1,284 passing**: backend 976 unit + 107 live, frontend 201. Real GitHub and Codeforces regression tests 4/4 (opt-in). **No real LeetCode test exists, because no LeetCode API is used** |
 | Docker | ⚪ Not used (by decision) |
 
 ---
 
-## Phase 1B: verified live on your machine (2026-11-12)
+## Phase 4: verified (2026-11-13)
 
-Real backend on `backend/.env`, your PostgreSQL, Tesseract; synthetic JDs ("Example Analytics Ltd"):
+**End-to-end through the running backend (`ENABLED_PLATFORMS=github,codeforces,leetcode` for that process only) and your PostgreSQL:**
 
 | Step | Result |
 |---|---|
-| Upload TXT / PDF / scanned PDF / DOCX (`POST /job-descriptions/upload`) | ✅ HTTP 202 each |
-| Extraction | ✅ `txt` 600 chars · `pdf_text` 614 · **`pdf_ocr` 281** (image-only PDF) · `docx` 610 |
-| **LLM structuring** | 🔴 Not verified; each correctly ended `failed` / `llm_not_configured`, with text kept for re-parse and **no invented title** |
-| `GET /{id}/parsed` before success | ✅ 409 `parse_not_completed` |
-| Duplicate upload | ✅ 409 `duplicate_job_description` with the existing id |
-| Password-protected PDF / binary file renamed `.txt` | ✅ 422 `encrypted_file` / 415 `content_mismatch` |
-| Download original | ✅ Byte-identical, attachment |
-| Delete | ✅ 204, row and file removed, then 404 |
-| JD text in logs | ✅ 0 occurrences |
-| Frontend `/job-descriptions`; CORS preflight for review `PUT` | ✅ 200 / allowed |
+| `GET /integrations/leetcode/status` | `manual_self_reported`, `platform_api: unavailable`, `sync_supported: false`, `contacts_leetcode: false`, with both sources |
+| Invalid inputs | `leetcode.cn` and `169.254.169.254` → `unsupported_domain`; problem URL and `/graphql` → `not_a_profile`; `bad!name` → `invalid_username` |
+| Link `https://leetcode.com/u/jane_doe/` | 201; `sync_status: not_applicable`, `collection_status: unavailable`, ownership `unverified`; warnings say the username was not checked and ownership is not verified |
+| `POST …/leetcode/sync` | 404 (does not exist) |
+| Inconsistent evidence (easy + medium + hard ≠ total) | 422 with the specific reason; the submitted note is not echoed |
+| Save evidence | 200: `self_reported` / `not_verified`, revision 1, provenance on every section. The contest section is "not provided" (null), **not zero** |
+| Replace evidence | revision 2; omitted values are null; a real `contests_attended: 0` stays 0; reported by the recruiter |
+| Clear evidence / remove | 204, association kept / 204 → 404 |
+| Database row | `collected_data` and `collected_at` **null**; evidence only in `self_reported_data` (`not_verified`) |
+| Backend log | **0 outbound HTTP requests**; the private note is not logged |
+| Cleanup | E2E candidate deleted |
 
-Structuring, grounding, review and re-parse are covered by automated tests with a scripted LLM double (22 live workflow tests against PostgreSQL). Two real-provider tests (`test_llm_provider_live.py`, one resume and one JD) are ready and run automatically once a key is set.
-
-### To finish Phases 1A and 1B
-
-1. Add `GROQ_API_KEY=<your key>` to `backend/.env` (never commit it or paste it in chat), then restart the backend.
-2. Run the real-provider tests and all live tests: `powershell -ExecutionPolicy Bypass -File scripts\integration-test.ps1` (expect 72 passed, 0 skipped).
-3. Re-parse the synthetic records kept for this purpose:
-   ```powershell
-   # Job descriptions (TXT, scanned PDF)
-   curl.exe -X POST http://127.0.0.1:8000/api/v1/job-descriptions/0c2cf97f-7bb9-4d42-843f-5dd3fd10d20e/parse
-   curl.exe -X POST http://127.0.0.1:8000/api/v1/job-descriptions/83225881-fb38-49b5-a1db-6df1f221acf4/parse
-   curl.exe http://127.0.0.1:8000/api/v1/job-descriptions/0c2cf97f-7bb9-4d42-843f-5dd3fd10d20e/parsed
-   # Resumes (from Phase 1A)
-   curl.exe -X POST http://127.0.0.1:8000/api/v1/resumes/395dcf20-b0ab-4729-802e-245c7cea9c7e/parse
-   ```
-   Expect `completed`, with required skills Python, FastAPI and PostgreSQL, preferred skills Docker, Kubernetes and AWS, and a 5-year minimum. If the default model has been retired, set `LLM_MODEL`.
-4. Delete the synthetic data afterwards (`DELETE /job-descriptions/{id}`, `DELETE /resumes/{id}`).
+**Bug found by this run and fixed:** the "not in the future" date check used the UTC date. Between midnight and 05:30 IST it would have rejected today's date, so it now allows one day of leeway. A test covers this.
 
 ---
 
-## Phase 1B scope delivered
+## Phase 4 scope delivered
 
 | Requirement | Delivered |
 |---|---|
-| 1. JD upload (PDF, DOCX, TXT) | `POST /api/v1/job-descriptions/upload`. TXT accepts UTF-8 (with or without BOM), UTF-16 (BOM) and cp1252; binary data renamed `.txt` is rejected. 5 MB / 20-page limits. Corrupted, empty, truncated, password-protected, macro-enabled and zip-bomb files are rejected. Scanned PDFs are OCR'd. |
-| 2. Information extraction | Title, company, location, summary, required skills, preferred skills, minimum and preferred experience, education, responsibilities, qualifications, soft skills, seniority. Languages, frameworks/libraries, databases and cloud/DevOps are a **technology summary derived from skill categories**, so they can never disagree with the skill lists. |
-| 3. LLM integration | Reuses the Groq/OpenRouter client. Dedicated JD prompt. JSON mode, strict Pydantic schema, corrective retry (shared `llm_json` loop, also used by resumes). Each requirement carries **verbatim JD evidence**. Model name and warnings recorded. Timeout and API failures map to error codes. |
-| Never invent requirements | Grounding drops any skill, responsibility, qualification, education or experience item whose name or quote is not in the JD; years must appear in their quote; unstated seniority is cleared; a skill in both lists is kept as required only. |
-| 4. Database | Reused the `job_descriptions` table. Migration `0003` adds the file reference, extracted text, status, error code, warnings, model and parsed time, plus `reviewed_data`/`reviewed_at`. `title`/`description_text` are nullable until parsed. `analysis` keeps the untouched LLM output. |
-| 5. APIs | Upload, get, get parsed, re-parse, list (paginated), delete, plus **`PUT /{id}/parsed`** (save review), `DELETE /{id}/parsed/review` (restore extraction) and `GET /{id}/file` (download). |
-| 6. Frontend | `/job-descriptions`: upload, list, status polling, role details, required vs preferred skills, technology summary, experience, education, responsibilities with evidence quotes, warnings, **review and correct editor**, restore, retry, download and delete. |
+| Profile association | Username, `https://leetcode.com/u/{username}/` or the legacy `https://leetcode.com/{username}/`. Rejects `leetcode.cn`, subdomains, problem, contest, discuss, `/graphql`, `/api` and other site pages, credentials, ports, encoded paths and reserved names. The username is **never sent anywhere**. Duplicates are detected case-insensitively; ownership stays unverified. |
+| Evidence (manual) | Who reported it (candidate, or recruiter from the candidate's statement); "as of" date; total, easy, medium and hard solved; contest rating, contests attended and top %; contest history; languages and topics (optional counts); notes. Strict validation: integers only (no `true`/`"5"`), bounds, easy + medium + hard ≤ or = total, per-language/topic ≤ total, no contest details when attended = 0, history ≤ attended, no duplicates, no future dates or dates before 2015, no control characters, unknown keys rejected, at least one value. |
+| Evidence quality | Every section has a status (`available` = provided, `not_collected` = not provided), a note, and provenance: platform `leetcode`, `source_type: self_reported`, `verification_status: not_verified`, `method: manual_entry`, reported_by, claimed profile URL, submitted_at. Revisions are counted. Freshness gives the age from "as of" (or submission) and flags it stale after 30 days (configurable). |
+| Separation from platform evidence | Migration `0005` adds `self_reported_data` and `self_reported_at`. `collected_data` stays null for LeetCode. The schema accepts only `self_reported` / `not_verified`, and the frontend parser rejects anything claiming verification. |
+| No contact with LeetCode | LeetCode modules import no HTTP client (checked by a test); no LeetCode endpoint, cookie or session string exists in the app (test); outbound requests fail the API and live tests (patched guard); the E2E log shows none. |
+| API | Link, get, put evidence, clear evidence, remove, integration status (findings and sources); capabilities report the mode. No sync or retry endpoints exist, because no permitted source does. |
+| Frontend | LeetCode section: an explanation with the findings and source links; link; "Platform data: not available"; an evidence form (empty means not provided); a view where everything is badged "Self-reported · not verified"; stale warning; edit, clear, remove. The API client now shows the server's validation details. |
 
 ---
 
-## Test results (2026-11-12)
+## Test results (2026-11-13)
 
 | Suite | Result |
 |---|---|
-| Backend lint / format / types | ✅ ruff clean (86 files); mypy strict: 0 issues in 85 files |
-| Backend unit | ✅ **484 passed** |
-| Backend live (PostgreSQL + Memurai + Tesseract) | ✅ **70 passed**, 2 skipped (real Groq; no key) |
-| Backend combined coverage | ✅ **95%** |
-| Frontend lint / typecheck / build | ✅ 0 problems; `/`, `/resumes`, `/job-descriptions` prerendered |
-| Frontend tests | ✅ **124 passed** (10 files) |
+| Backend lint / format / types | ✅ ruff clean (129 files); mypy strict: 0 issues in 128 files |
+| Backend unit | ✅ **976 passed** (135 new) |
+| Backend live (PostgreSQL) | ✅ **107 passed**, 6 skipped (opt-in real GitHub, Codeforces and Groq) |
+| Backend combined coverage | ✅ **97%** (LeetCode modules 98-100%) |
+| Real GitHub and Codeforces regression (opt-in) | ✅ **4/4 passed** |
+| Real LeetCode API | ⚪ **Not applicable**: no LeetCode API is used |
+| Frontend lint / typecheck / build | ✅ |
+| Frontend tests | ✅ **201 passed** (16 files; 29 new) |
 
 Details: [TEST_REPORT.md](TEST_REPORT.md).
-
----
-
-## Local environment
-
-| Component | Detail |
-|---|---|
-| Python / Node | 3.12.16 (uv) / 24.x |
-| PostgreSQL | 18, `127.0.0.1:5432`, DB `candidate_intel`, owner `candidate_app` (not superuser) |
-| Redis | Memurai 8.2, `127.0.0.1:6379` |
-| OCR | Tesseract 5.4.0, `eng` |
-| LLM | Groq, default model `llama-3.3-70b-versatile`, **key not set** |
-| File storage | `backend/storage/resumes/`, `backend/storage/job_descriptions/` (git-ignored) |
 
 ---
 
@@ -112,28 +106,28 @@ Details: [TEST_REPORT.md](TEST_REPORT.md).
 
 | # | Item | Impact | Action |
 |---|---|---|---|
-| 1 | **`GROQ_API_KEY` not set** | Structuring cannot run; Phases 1A and 1B cannot be closed | The 4 steps above |
-| 2 | In-process background tasks | A restart mid-parse leaves `processing`; re-parse is allowed after 10 minutes | Durable queue (later phase) |
-| 3 | No authentication or authorisation | Anyone who can reach the API can read and modify data; it is bound to 127.0.0.1 locally | Required before any shared deployment |
-| 4 | Reviewed corrections are not re-grounded | Human edits are trusted as-is (by design); edited items lose their evidence quote | Optional: show "edited by reviewer" in later phases |
-| 5 | JD duplicates detected by exact file hash only | The same JD saved in another format counts as a new upload | Text-level de-duplication (later) |
-| 6 | Default Groq model may be retired | Parse fails with `llm_error` | Set `LLM_MODEL` |
-| 7 | Uncovered rare branches: JD routes 88%, JD processor 87% | Disk-write failure, DB uniqueness race, file-delete error, unexpected-exception path | Fault-injection tests |
-| 8 | No candidate-delete endpoint; synthetic E2E records kept | Test data in your database | Delete after the Groq verification |
-| 9 | `TestClient` deprecation warning; 7 moderate dev-only `npm audit` findings | Tooling only | Carried over |
-| 10 | Nothing committed to git yet | | Make the initial commit |
+| 1 | **`ENABLED_PLATFORMS` is empty in your `backend/.env`** | Platform features are disabled in your normal runs | Set `ENABLED_PLATFORMS=github,codeforces,leetcode` |
+| 2 | **`frontend/src/app/resumes/page.tsx` is missing from the pushed commit** (`.gitignore` fixed in Phase 3) | A fresh clone has no `/resumes` page | Include it and `frontend/src/app/candidates/page.tsx` in the next commit |
+| 3 | `GROQ_API_KEY` not set | Phases 1A and 1B cannot be closed | See DEVELOPMENT_LOG.md |
+| 4 | LeetCode evidence cannot be verified | It is a claim, not proof | Shown everywhere as self-reported; later phases must weight it accordingly (e.g. ask for a screen-share in interview) |
+| 5 | LeetCode position should be re-checked if its terms change | An official API could appear | Re-run the feasibility check before any change |
+| 6 | Ownership verification not implemented (all platforms) | Profiles stay `unverified` | Later phase |
+| 7 | In-process background tasks; no authentication | As in earlier phases | Later phases |
+| 8 | Phase 2 synthetic E2E candidate remains | One test row | Later cleanup |
+| 9 | Phases 2-4 not committed yet | | Commit and push when you are ready (as NiranjanKJ304) |
 
 ---
 
 ## How to run
 
 ```powershell
+# backend/.env:  ENABLED_PLATFORMS=github,codeforces,leetcode
 cd backend
-uv run alembic upgrade head          # now at 0003
+uv run alembic upgrade head                 # 0005_self_reported_evidence
 uv run uvicorn app.main:create_app --factory --reload --port 8000
 
 cd frontend
-npm run dev                           # http://localhost:3000/job-descriptions
+npm run dev                                  # http://localhost:3000/candidates
 ```
 
 ---

@@ -372,7 +372,341 @@ Deletes the row (including extracted text, extraction and review) and the stored
 
 ### `GET /api/v1/system/capabilities`
 
-Now also reports `job_description: {max_bytes, max_pages, accepted_extensions: [".pdf", ".docx", ".txt"]}`.
+Also reports `job_description: {max_bytes, max_pages, accepted_extensions}`, `github: {enabled, authenticated, accepted_inputs}`, `codeforces: {enabled, accepted_inputs, submission_limit}` and `leetcode: {enabled, integration_mode: "manual_self_reported", sync_supported: false, accepted_inputs}`.
+
+---
+
+## GitHub developer profiles (Phase 2)
+
+Enabled only when `ENABLED_PLATFORMS` includes `github`. Otherwise `POST` endpoints return
+503 `integration_disabled`; stored data stays readable. All GitHub calls go to the fixed host
+`https://api.github.com` (REST API version 2022-11-28) and use only the validated username.
+Submitted URLs are never fetched.
+
+### `POST /api/v1/candidates/{candidate_id}/github`
+
+Body: `{"profile": "<username | @username | https://github.com/{username}>"}` (1-300 characters,
+unknown keys rejected). It creates the association (`ownership_status: "unverified"`) and starts a
+background sync. Response **202** `GitHubProfileResponse` with `sync_status: "pending"`.
+
+| Status | `error.code` | When |
+|---|---|---|
+| 404 | `not_found` | Unknown candidate |
+| 409 | `duplicate_profile` | The candidate already has a GitHub profile (same name, case-insensitive, or a different one); `details[0]` gives `profile_id` and `username` |
+| 422 | `empty`, `too_long`, `malformed`, `malformed_url`, `unsupported_scheme`, `unsupported_domain`, `not_a_profile`, `invalid_username` | Input rejected; no network call is made |
+| 503 | `integration_disabled` / `database_unavailable` | |
+
+Accepted: GitHub usernames (1-39 characters, letters, digits and single hyphens, no leading or
+trailing hyphen) and URLs on `github.com` / `www.github.com` with exactly one path segment.
+Rejected: other hosts and subdomains (`gist.`, `api.`), look-alike domains, credentials in
+URLs, ports, `ftp:`, `file:` and `javascript:` schemes, repository and sub-page URLs, and
+reserved paths (`settings`, `orgs`, …).
+
+### `GET /api/v1/candidates/{candidate_id}/github`
+
+`GitHubProfileResponse`:
+
+| Field | Meaning |
+|---|---|
+| `id`, `candidate_id`, `platform` (`github`), `username`, `profile_url` | Association (`username` becomes GitHub's canonical login after the first sync) |
+| `ownership_status` | `unverified`. A submitted URL is never treated as proof of ownership |
+| `collection_status` | `not_collected` / `collected` / `unavailable` (account missing or an organisation) / `failed` (never collected successfully) |
+| `sync_status` | `pending` / `processing` / `completed` / `failed` (last run) |
+| `sync_error_code`, `sync_error` | `invalid_profile`, `not_a_user`, `rate_limited`, `permission_denied`, `auth_failed`, `network_error`, `timeout`, `api_error`, `integration_disabled`, `internal_error` |
+| `sync_warnings[]` | Partial data, truncation, rename, the same account linked to another candidate, no token |
+| `last_sync_attempt_at`, `collected_at` | Last attempt and last **successful** collection |
+| `data` | Last successful `GitHubSnapshot`, kept even when a later retry fails |
+
+`GitHubSnapshot` sections each carry `status`, `note` and `provenance`
+`{source_platform: "github", source_url, api_reference, collected_at}`:
+
+| Section | Content |
+|---|---|
+| `profile` | `login`, `id`, `account_type`, `name`, `bio`, `company`, `location`, `blog`, `public_repos`, `followers`, `following`, `created_at`, `updated_at`, `html_url` (no e-mail) |
+| `repositories` | Up to `GITHUB_MAX_REPO_PAGES` x 100, most recently pushed first: `name`, `full_name`, `description`, `primary_language`, `html_url`, `created_at`/`updated_at`/`pushed_at`, `stargazers_count`, `forks_count`, `is_fork`, `is_archived`, `topics`, `readme` (`status`, `excerpt` up to 3,000 characters, `size_bytes`, `truncated`; fetched for up to `GITHUB_README_LIMIT` non-fork, non-archived repositories; null when not requested). Also `truncated`, `skipped_malformed`, `reported_public_repos` |
+| `languages`, `topics` | Counts across non-fork repositories (repositories per language or topic, not code volume) |
+| `activity` | From the public events feed (at most 90 days / 300 events): `events_analyzed`, `event_counts`, `push_events`, `commits_reported` (null if not reported), `active_repositories`, first/last event times. **No commit messages or author e-mails** |
+| `pull_requests`, `issues` | Search API: `total_count` (GitHub's estimate), `incomplete_results`, the most recent `GITHUB_SEARCH_ITEMS` items (`title`, `repository`, `state`, dates, `merged`, `html_url`) |
+| `contribution_calendar` | Always `unavailable`: not offered by the REST API |
+
+Availability values: `available`, `empty` (nothing there, which is **not** evidence of missing
+skills), `unavailable`, `permission_denied`, `rate_limited`, `network_error`, `error`,
+`not_collected`. Snapshot-level: `collected_at`, `authenticated`, `warnings`, `api_requests`.
+
+404 if the candidate has no GitHub profile.
+
+### `POST /api/v1/candidates/{candidate_id}/github/sync`
+
+Trigger or retry. 202 with `sync_status: "pending"`. 409 if a sync started less than 10 minutes
+ago is still pending or processing. 503 when disabled.
+
+### `GET /api/v1/candidates/{candidate_id}/github/repositories`
+
+From the last snapshot (no API call). Query: `limit` 1-300 (default 50), `offset`,
+`include_forks` (true), `include_archived` (true), `language` (case-insensitive).
+Response: `{items, total, limit, offset, status, collected_at}`. Before any successful
+collection: `status: "not_collected"`, `items: []`.
+
+### `DELETE /api/v1/candidates/{candidate_id}/github` → 204
+
+Removes the association and its collected data. Deleting a candidate cascades.
+
+### `GET /api/v1/integrations/github/status`
+
+`{enabled, authenticated, reachable, rate_limits: [{resource, limit, remaining, reset_at}], error, limits}`.
+When enabled, it calls GitHub's `GET /rate_limit`, which does not count against the quota.
+`reachable` is null when the integration is disabled. Token values are never returned.
+
+### `GET /api/v1/candidates?limit=50&offset=0`
+
+New in Phase 2: lists candidates, newest first:
+`{items: CandidateRead[], total, limit, offset}`. `limit` 1-200.
+
+### GitHub API budget and limits
+
+| | Unauthenticated | With `GITHUB_TOKEN` (no scopes needed) |
+|---|---|---|
+| Core REST | 60 / hour | 5,000 / hour |
+| Search | 10 / minute | 30 / minute |
+
+Per sync, with the defaults: 1 profile + 1-3 repository pages + up to 10 READMEs + 1-3 event
+pages (core) and 2 searches. Primary limit exhausted (`x-ratelimit-remaining: 0`) → no
+waiting; sections are marked `rate_limited` and the reset time is in the note. Secondary
+limits with `retry-after` ≤ 10 s are retried; 5xx and network errors are retried with backoff
+(`GITHUB_MAX_RETRIES`). Redirects and pagination links are followed only within
+`https://api.github.com`.
+
+---
+
+## Codeforces developer profiles (Phase 3)
+
+Enabled only when `ENABLED_PLATFORMS` includes `codeforces`. Otherwise add, sync and retry
+return 503 `integration_disabled`; stored data stays readable. Every call goes to the fixed
+base `https://codeforces.com/api/`, uses only the documented public methods `user.info`,
+`user.rating` and `user.status` (an allow-list in the client), and passes only the validated
+handle. No API key is used, and submitted URLs are never fetched.
+
+### `POST /api/v1/candidates/{candidate_id}/codeforces`
+
+Body: `{"profile": "<handle | https://codeforces.com/profile/{handle}>"}` (1-300 characters,
+unknown keys rejected). It creates the association (`ownership_status: "unverified"`) and starts
+a background sync. Response **202** `CodeforcesProfileResponse` with `sync_status: "pending"`.
+
+| Status | `error.code` | When |
+|---|---|---|
+| 404 | `not_found` | Unknown candidate |
+| 409 | `duplicate_profile` | The candidate already has a Codeforces profile (same handle, case-insensitive, or a different one); `details[0]` gives `profile_id` and `handle` |
+| 422 | `empty`, `too_long`, `malformed`, `malformed_url`, `unsupported_scheme`, `unsupported_domain`, `not_a_profile`, `invalid_handle` | Input rejected; no network call is made |
+| 503 | `integration_disabled` / `database_unavailable` | |
+
+Accepted handles: at most 24 characters from latin letters, digits, `_`, `-` and `.`, with at
+least one letter or digit. URLs must be on `codeforces.com` / `www.codeforces.com` with the
+path `/profile/{handle}`. Rejected: other hosts (`codeforces.ru`, `m1.codeforces.com`,
+look-alike domains), credentials, ports, non-http schemes, percent-encoded or backslash
+paths, contest, problem, blog and submission URLs, and `;` (which would query several
+users in `user.info`).
+
+### `GET /api/v1/candidates/{candidate_id}/codeforces`
+
+`CodeforcesProfileResponse`:
+
+| Field | Meaning |
+|---|---|
+| `id`, `candidate_id`, `platform` (`codeforces`), `handle`, `profile_url` | Association (`handle` becomes the current handle reported by Codeforces after a sync) |
+| `ownership_status` | `unverified`. A submitted handle is never treated as proof of ownership |
+| `collection_status` | `not_collected` / `collected` / `unavailable` (no such user) / `failed` (never collected successfully) |
+| `sync_status` | `pending` / `processing` / `completed` / `failed` (last run) |
+| `sync_error_code`, `sync_error` | `invalid_profile`, `rate_limited`, `network_error`, `timeout`, `api_error`, `integration_disabled`, `internal_error` |
+| `sync_warnings[]` | Truncated window, malformed records skipped, stopped early, unrated account, handle changed, account also linked to another candidate |
+| `last_sync_attempt_at`, `collected_at` | Last attempt and last **successful** collection |
+| `freshness` | `{collected_at, age_seconds, stale, stale_after_hours: 168}`: `stale` after 7 days or if never collected |
+| `data` | Last successful `CodeforcesSnapshot`, kept when a later sync fails |
+
+`CodeforcesSnapshot` sections each carry `status`, `note` and `provenance`
+`{source_platform: "codeforces", source_url, api_method, collected_at}`:
+
+| Section | API method | Content |
+|---|---|---|
+| `profile` | `user.info` | `handle`, `first_name`, `last_name`, `country`, `city`, `organization`, `rating`, `max_rating`, `rank`, `max_rank` (null if unrated), `contribution`, `registered_at`, `last_online_at`, `profile_url`. Not stored: e-mail, VK/OpenID ids, avatar |
+| `rating_history` | `user.rating` | Rated contests, oldest first: `contest_id`, `contest_name`, `rank`, `old_rating`, `new_rating`, `delta`, `rating_updated_at`, `contest_url`. `skipped_malformed` |
+| `submissions` | `user.status` | The most recent `CODEFORCES_SUBMISSION_LIMIT` (default 500, hard maximum 1000), newest first: `id`, `contest_id`, `problem_index`, `problem_name`, `problem_rating` (null if the problem has none), `tags`, `programming_language`, `verdict` (null while judging), `passed_test_count`, `submitted_at`, `relative_time_seconds` (null for practice), `participant_type`, `problem_key`, `problem_url`. Also `requested_limit`, `truncated` (more exist), `skipped_malformed`, `window_start`, `window_end`. No source code (never requested), no team-mate handles |
+| `analytics` | derived | `lifetime` (scope `lifetime`): `current_rating`, `max_rating`, `rank`, `max_rank`, `rated_contests` (null if `user.rating` failed). `submissions` (scope `collected_window`, **null when submissions could not be collected, never zeros**): see definitions below |
+
+**Collected-window statistics** (`analytics.submissions`; reproducible from `submissions.items`):
+
+| Field | Definition |
+|---|---|
+| `total_submissions` | Submissions collected |
+| `accepted_submissions` | Verdict `OK` |
+| `pending_submissions` | No verdict yet, `TESTING` or `SUBMITTED` |
+| `rejected_submissions` | Any other verdict (WRONG_ANSWER, TIME_LIMIT_EXCEEDED, COMPILATION_ERROR, SKIPPED, CHALLENGED, ...) |
+| `attempted_unique_problems` / `accepted_unique_problems` | Distinct `problem_key` (contest id + index) attempted / with at least one `OK` |
+| `accepted_by_rating[]` | `{rating, problems}`: accepted unique problems per problem rating (`rating: null` = unrated problem) |
+| `accepted_by_tag[]` | `{name, count}`: accepted unique problems per tag |
+| `verdicts[]`, `languages[]` | `{name, count}` over submissions |
+| `monthly_activity[]` | `{month: "YYYY-MM", submissions, accepted}` (UTC) |
+| `contests_in_window` | Distinct contests with `CONTESTANT` or `OUT_OF_COMPETITION` submissions |
+| `window_start`, `window_end`, `truncated` | Time span of the window; `truncated` means older submissions exist |
+
+These numbers describe the collected sample only. They are not lifetime totals, and neither
+they nor ratings are a complete measure of programming ability.
+
+### `POST /api/v1/candidates/{candidate_id}/codeforces/sync`
+
+Refresh at any time. 202 with `sync_status: "pending"`. 409 if a sync started less than 10
+minutes ago is still pending or processing. 503 when disabled.
+
+### `POST /api/v1/candidates/{candidate_id}/codeforces/retry`
+
+Retry a failed sync. 202 when the last sync failed; otherwise 409 `not_failed` (use `/sync`).
+503 when disabled.
+
+### `GET /api/v1/candidates/{candidate_id}/codeforces/submissions`
+
+From the last snapshot (no API call). Query: `limit` 1-1000 (default 50), `offset`, `verdict`,
+`language`, `tag` (all case-insensitive exact matches). Response:
+`{items, total, limit, offset, status, truncated, collected_at}`. Before any successful
+collection: `status: "not_collected"`, `items: []`.
+
+### `GET /api/v1/candidates/{candidate_id}/codeforces/rating-history`
+
+From the last snapshot. Query: `limit` 1-1000 (default 100), `offset`. Response:
+`{items, total, limit, offset, status, collected_at}`, oldest contest first.
+
+### `DELETE /api/v1/candidates/{candidate_id}/codeforces` → 204
+
+Removes the association and its collected data. Other platforms are unaffected. Deleting a
+candidate cascades.
+
+### `GET /api/v1/integrations/codeforces/status`
+
+`{enabled, api_base_url, api_methods, min_request_interval_seconds, submission_limit,
+submission_hard_max, requests_made, last_success_at, last_error, last_error_at, note}`.
+**It makes no request to Codeforces.** It reports configuration and the state observed by
+this server process.
+
+### Codeforces API usage and limits
+
+- Codeforces asks for at most about one call every 2 seconds. Every request passes one
+  shared pacer (asyncio lock plus `CODEFORCES_MIN_REQUEST_INTERVAL_SECONDS`, minimum 2),
+  so concurrent syncs are serialised.
+- One sync makes 3 requests with the defaults: `user.info`, `user.rating` and one
+  `user.status` page (`count` = limit + 1, to detect truncation).
+- `status: "FAILED"`: a "handle not found" comment means `invalid_profile`. "Call limit
+  exceeded" and HTTP 429 are retried with backoff (`CODEFORCES_MAX_RETRIES`), then
+  `rate_limited`. Other comments mean `api_error`. HTTP 5xx without a FAILED body, timeouts
+  and network errors are retried, then `network_error` / `timeout`.
+- `user.info` failing aborts the sync, and the previous snapshot is kept. A failing
+  `user.rating` or `user.status` gives a partial snapshot with that section marked. After a
+  rate limit, later methods are skipped (`rate_limited`) without further calls.
+- Redirects are followed once, and only to `https://codeforces.com/api/`.
+- No response cache: reads are served from the stored snapshot, and syncs are user-triggered.
+
+---
+
+## LeetCode profiles (Phase 4): manual, self-reported evidence only
+
+**Integration type: manual candidate-submitted evidence.** LeetCode offers no official or
+permitted data API, and its Terms of Service forbid scraping (findings and sources:
+`GET /api/v1/integrations/leetcode/status`, ARCHITECTURE.md). These endpoints **never
+contact LeetCode**: there is no sync and no retry, and no username is checked against
+LeetCode. Everything stored is labelled `self_reported` / `not_verified`.
+
+Enabled only when `ENABLED_PLATFORMS` includes `leetcode`. Otherwise link and evidence
+submission return 503 `integration_disabled`; stored data stays readable and removable.
+
+### `POST /api/v1/candidates/{candidate_id}/leetcode` → 201
+
+Body: `{"profile": "<username | https://leetcode.com/u/{username}/ | https://leetcode.com/{username}/>"}`
+(1-300 characters, unknown keys rejected). It creates the association with
+`ownership_status: "unverified"`, `collection_status: "unavailable"`,
+`sync_status: "not_applicable"`, `evidence: null`.
+
+| Status | `error.code` | When |
+|---|---|---|
+| 404 | `not_found` | Unknown candidate |
+| 409 | `duplicate_profile` | The candidate already has a LeetCode profile (case-insensitive) |
+| 422 | `empty`, `too_long`, `malformed`, `malformed_url`, `unsupported_scheme`, `unsupported_domain`, `not_a_profile`, `invalid_username` | Input rejected |
+| 503 | `integration_disabled` / `database_unavailable` | |
+
+Usernames: up to 40 latin letters, digits, `_`, `-` or `.`, with at least one letter or digit,
+and not a site page name. URLs: `leetcode.com` / `www.leetcode.com` only (`leetcode.cn` is a
+separate service and is rejected); `/u/{username}` or the legacy single segment. Problem,
+contest, discuss, `/graphql`, `/api`, `/submissions` and other pages are rejected.
+
+### `GET /api/v1/candidates/{candidate_id}/leetcode`
+
+`LeetCodeProfileResponse`:
+
+| Field | Meaning |
+|---|---|
+| `id`, `candidate_id`, `platform` (`leetcode`), `username`, `profile_url` | Association; `profile_url` is canonical `https://leetcode.com/u/{username}/` and is never fetched |
+| `ownership_status` | `unverified` |
+| `collection_status` | Always `unavailable`: nothing is collected from LeetCode |
+| `sync_status` | Always `not_applicable` |
+| `integration_mode` | `manual_self_reported` |
+| `platform_data` | `{status: "unavailable", reason, sources}` |
+| `evidence` | `LeetCodeEvidence` or `null` (none submitted) |
+| `freshness` | `{submitted_at, as_of, age_days, stale, stale_after_days}`: age from `as_of` (or the submission date); `stale` after `LEETCODE_EVIDENCE_STALE_AFTER_DAYS` (default 30) or when there is no evidence |
+| `warnings` | Username not checked against LeetCode; ownership not verified; self-reported and not verified; no "as of" date |
+
+`LeetCodeEvidence` (stored in `developer_profiles.self_reported_data`, **never** in
+`collected_data`; strict schema that accepts only `source_type: "self_reported"` and
+`verification_status: "not_verified"`):
+
+| Field | Content |
+|---|---|
+| `reported_by` | `candidate` or `recruiter` (entered from the candidate's statement) |
+| `submitted_at`, `as_of`, `revision` | When entered; the date the figures describe; increments on each replacement |
+| `solved` | `total`, `easy`, `medium`, `hard` |
+| `contest` | `rating`, `attended`, `top_percentage` |
+| `contest_history.items[]` | `contest_name`, `rank`, `rating_after`, `contest_date` |
+| `languages.items[]`, `topics.items[]` | `name`, `problems_solved` (optional) |
+| `notes` | Free text (≤ 1,000 characters, untrusted, rendered as text) |
+
+Every section has `status` (`available` = provided, `not_collected` = **not provided:
+unknown, not zero**), `note` and `provenance` `{source_platform: "leetcode", source_type:
+"self_reported", verification_status: "not_verified", method: "manual_entry", reported_by,
+claimed_profile_url, submitted_at}`. A value that was not provided is `null`; a real 0 stays 0.
+
+### `PUT /api/v1/candidates/{candidate_id}/leetcode/evidence` → 200
+
+Submit or replace (not merge) the evidence. Body `LeetCodeEvidenceInput` (unknown keys
+rejected):
+
+| Field | Rule |
+|---|---|
+| `reported_by` | **Required**: `candidate` or `recruiter` |
+| `as_of` | Date; not in the future (1 day of leeway for timezones), not before 2015-01-01 |
+| `total_solved`, `easy_solved`, `medium_solved`, `hard_solved` | Integers 0-10,000 (strict: no `true`, no strings) |
+| `contest_rating` 0-5,000 · `contests_attended` 0-5,000 · `contest_top_percentage` > 0 and ≤ 100 | |
+| `contest_history[]` (≤ 100) | `contest_name` (required, ≤ 120), `rank` ≥ 1, `rating_after` 0-5,000, `contest_date` |
+| `languages[]` (≤ 30), `topics[]` (≤ 60) | `name` (≤ 60), `problems_solved` 0-10,000 |
+| `notes` | ≤ 1,000 characters |
+
+Cross-field rules: at least one evidence value; easy + medium + hard ≤ total (and = total
+when all four are given); each language or topic count ≤ total; no contest rating, top % or
+history when `contests_attended` is 0; history entries ≤ contests attended; no duplicate
+names (case-insensitive) or contests; names are whitespace-normalised; control characters
+are rejected. Errors: 422 `validation_error` with `details[].msg` (submitted values are
+never echoed). 404 without a profile; 503 when disabled.
+
+### `DELETE /api/v1/candidates/{candidate_id}/leetcode/evidence` → 204
+
+Clears the evidence and keeps the association.
+
+### `DELETE /api/v1/candidates/{candidate_id}/leetcode` → 204
+
+Removes the association and its evidence. Other platforms are unaffected. Deleting a
+candidate cascades.
+
+### `GET /api/v1/integrations/leetcode/status`
+
+`{enabled, integration_mode: "manual_self_reported", platform_api: "unavailable",
+sync_supported: false, contacts_leetcode: false, investigated_on, findings[], sources[],
+evidence_stale_after_days}`.
+
+There are **no** `/sync` or `/retry` endpoints for LeetCode.
 
 ---
 
@@ -383,11 +717,11 @@ Now also reports `job_description: {max_bytes, max_pages, accepted_extensions: [
 | Schema | Direction | Validation highlights |
 |---|---|---|
 | `JobDescriptionCreate` | input | `title` 1-300 characters, `description_text` 1-100,000 characters, `company` optional, `source_url` absolute http(s) only |
-| `DeveloperProfileCreate` | input | `platform` one of github, leetcode, hackerrank, codeforces, codechef, kaggle; `username` matches `[A-Za-z0-9._-]`, 1-100 characters, starting with a letter or digit; `profile_url` http(s) only |
+| `DeveloperProfileCreate` (generic; GitHub and Codeforces use `GitHubProfileCreate` / `CodeforcesProfileCreate`) | input | `platform` one of github, leetcode, hackerrank, codeforces, codechef, kaggle; `username` matches `[A-Za-z0-9._-]`, 1-100 characters, starting with a letter or digit; `profile_url` http(s) only |
 | `DeveloperProfileRead` | output | `ownership_status`, `collection_status`, provenance (`source_url`, `collected_at`) |
 | `EvaluationRead` | output | `status`, `overall_score` null or 0-100 (null means not scored, never 0), `result`, `model_name` |
 
 ## Endpoints planned for later phases
 
-Developer-profile collection, evaluation and report endpoints
+Other platforms, evaluation and report endpoints
 will be documented here as each phase delivers them.

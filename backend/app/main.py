@@ -27,7 +27,14 @@ from app.core.middleware import (
     SecurityHeadersMiddleware,
 )
 from app.db.session import create_engine, create_session_factory
+from app.integrations.codeforces import CodeforcesClient
+from app.integrations.github import GitHubClient
 from app.integrations.llm import ChatCompletionClient
+from app.services.codeforces.collector import CodeforcesCollector
+from app.services.codeforces.collector import CollectorLimits as CodeforcesLimits
+from app.services.codeforces.sync import CodeforcesSyncService
+from app.services.github.collector import CollectorLimits, GitHubCollector
+from app.services.github.sync import GitHubSyncService
 from app.services.job_description.processor import JobDescriptionProcessor
 from app.services.job_description.structuring import JobDescriptionStructurer
 from app.services.resume.extraction import OcrConfig, ocr_available
@@ -62,6 +69,46 @@ def build_resume_pipeline(app: FastAPI, settings: Settings) -> None:
         storage=storage,
         structurer=structurer,
         ocr=ocr,
+    )
+
+    # GitHub (Phase 2): fixed-host REST client on the shared HTTP client.
+    github_client = GitHubClient(
+        app.state.http_client,
+        token=settings.github_token_value,
+        timeout_s=settings.github_timeout_seconds,
+        max_retries=settings.github_max_retries,
+    )
+    app.state.github_client = github_client
+    app.state.github_sync = GitHubSyncService(
+        session_factory=app.state.session_factory,
+        collector=GitHubCollector(
+            github_client,
+            CollectorLimits(
+                max_repo_pages=settings.github_max_repo_pages,
+                readme_limit=settings.github_readme_limit,
+                readme_max_bytes=settings.github_readme_max_bytes,
+                max_event_pages=settings.github_max_event_pages,
+                search_items=settings.github_search_items,
+            ),
+        ),
+        enabled=lambda: settings.github_enabled,
+    )
+
+    # Codeforces (Phase 3): fixed-host public API client, paced (shared by all syncs).
+    codeforces_client = CodeforcesClient(
+        app.state.http_client,
+        timeout_s=settings.codeforces_timeout_seconds,
+        max_retries=settings.codeforces_max_retries,
+        min_interval_s=settings.codeforces_min_request_interval_seconds,
+    )
+    app.state.codeforces_client = codeforces_client
+    app.state.codeforces_sync = CodeforcesSyncService(
+        session_factory=app.state.session_factory,
+        collector=CodeforcesCollector(
+            codeforces_client,
+            CodeforcesLimits(submission_limit=settings.codeforces_submission_limit),
+        ),
+        enabled=lambda: settings.codeforces_enabled,
     )
 
     # Job descriptions reuse OCR, the LLM client and the storage implementation.
@@ -108,6 +155,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "llm_configured": app.state.llm_client.configured,
                 "ocr_available": ocr_available(app.state.ocr_config),
                 "resume_storage": str(app.state.resume_storage.root),
+                "github_enabled": settings.github_enabled,
+                "github_authenticated": app.state.github_client.authenticated,
+                "codeforces_enabled": settings.codeforces_enabled,
+                "leetcode_enabled": settings.leetcode_enabled,
             },
         )
         try:

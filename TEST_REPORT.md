@@ -5,6 +5,228 @@ not run is marked **NOT RUN** with the reason.
 
 ---
 
+## Phase 4: LeetCode Feasibility and Safe Implementation (2026-11-13)
+
+**Integration type tested: manual, self-reported evidence.** No LeetCode API is used, so **no real LeetCode API test exists or is claimed.** The "real" checks below exercise the running backend and your PostgreSQL only.
+
+### Summary
+
+| Check | Command | Result |
+|---|---|---|
+| Backend format / lint | `uv run ruff format --check .` / `uv run ruff check .` | ✅ 129 files / all checks passed |
+| Backend types | `uv run mypy` (strict) | ✅ 0 issues in 128 source files |
+| Backend unit | `uv run pytest -q` | ✅ **976 passed** |
+| Backend live (PostgreSQL) | `INTEGRATION_DATABASE_URL=… uv run pytest -m integration -rs` | ✅ **107 passed, 6 skipped** (opt-in real GitHub ×2, Codeforces ×2, Groq ×2) |
+| Backend combined | `uv run pytest -m "" --cov` | ✅ 97% coverage |
+| Real GitHub + Codeforces regression | `INTEGRATION_GITHUB_LIVE=1 INTEGRATION_CODEFORCES_LIVE=1 uv run pytest -m integration tests/integration/test_github_real_api.py tests/integration/test_codeforces_real_api.py` | ✅ **4 passed** (real network) |
+| Real LeetCode API | none | ⚪ **Not applicable**: no LeetCode API is used |
+| Migration on your DB | `uv run alembic upgrade head` / `current` / `check` | ✅ `0004 → 0005_self_reported_evidence (head)`; no drift |
+| Frontend lint / typecheck | `npm run lint` / `npm run typecheck` | ✅ |
+| Frontend tests | `npm test` | ✅ **201 passed** (16 files) |
+| Frontend build | `npm run build` | ✅ all 5 routes |
+| Resume / JD / GitHub / Codeforces regressions | (included above) | ✅ none |
+
+The combined run (unit + live) recorded 1,082 passed before the timezone fix. The fix only touches input validation, and it added one unit test; the unit suite was re-run afterwards (976 passed). The pre-existing Starlette `testclient` deprecation warning from two Phase 0 tests is unchanged.
+
+### Coverage of the LeetCode modules
+
+| Module | Coverage |
+|---|---|
+| `services/leetcode/{validation,evidence,feasibility}.py` | 100% |
+| `schemas/leetcode.py` | 99% |
+| `api/v1/leetcode.py` | 98% (IntegrityError race on concurrent links not exercised) |
+
+### New tests
+
+| File | Tests | Covers |
+|---|---|---|
+| `test_leetcode_validation.py` | 50 | 13 valid forms (`/u/`, legacy, `@`, www/http, case, query and fragment, full-width homoglyphs); 35 rejections incl. SSRF (`169.254.169.254`, `localhost`, `leetcode.com@host`, look-alike domains), `leetcode.cn`, subdomains, ports, credentials, schemes, problem/contest/discuss/`/graphql`/`/api`/`/submissions` URLs, reserved names, encoded paths, NUL, length; no echo of input; canonical URL |
+| `test_leetcode_evidence.py` | 49 | full payload; 26 rejections (empty, sum > total, sum ≠ total, language/topic > total, contest details with 0 attended, history > attended, duplicates, bounds, date before 2015, blank or control-character names and notes, list limits, extra keys, **`true` and `"1500"` as numbers**); future dates; timezone leeway; `reported_by` required and limited; normalisation; **zero is a real value**; **provenance on every section** (`self_reported`, `not_verified`, `manual_entry`, reporter, claimed URL, time); **not provided is null and `not_collected`, never zero**; recruiter entry and revisions; strict stored schema refuses `verified` / `platform_api`; age; **structural guarantees: LeetCode modules import no HTTP client; no LeetCode endpoint, cookie or session string anywhere in `app/`**; findings cite the primary sources |
+| `test_leetcode_api.py` | 32 | **any outbound HTTP fails the test (guard)**; link → 201 with `unavailable` / `not_applicable` / `unverified`, warnings and `collected_data` null; 5 invalid inputs; schema; duplicates; unknown candidate; evidence saved with labels while `collected_*` stay null; revision increments; 5 invalid evidence payloads (values not echoed, nothing stored); stale and fresh; unreadable stored evidence; clear keeps the association; remove; **no `/sync` or `/retry`**; disabled (503, reads still work); 404s; DB down on 5 endpoints; status (findings, sources, `contacts_leetcode: false`); capabilities |
+| `test_config.py` (LeetCode) | 3 | enablement; stale-days bounds |
+| `test_migrations_offline.py` | +1 (updated chain) | 0005 upgrade and downgrade SQL |
+| `test_leetcode_workflow_live.py` | 7 | PostgreSQL with an outbound guard: link persists with `collected_data`/`collected_at` null; submit, replace (no merge, unknowns null) and clear; invalid evidence not persisted (note not echoed); duplicate and re-association; candidate cascade; **GitHub, Codeforces and LeetCode on one candidate, and the GitHub and Codeforces sync services leave the LeetCode row untouched**; logs free of evidence content |
+| `test_migrations_live.py` | +1 (version 0005) | **0005 down/up on a populated table**: `not_applicable` → `pending`, columns dropped, re-upgrade, CHECK constraint enforced |
+| `frontend/src/lib/leetcode.test.ts` | 22 | parsers reject evidence or sections claiming verification, a platform source or available platform data; form → payload (empty omitted, real 0 kept, lists, contest history); 8 client rejections; edit-form round trip; server `details` surfaced; raw profile posted |
+| `frontend/src/components/leetcode/LeetCodeSection.test.tsx` | 7 | explanation with findings and source links and no sync button; link → evidence form → saved view badged "Self-reported · not verified", "not provided (unknown, not zero)", exact payload; client validation; server validation details; edit pre-fill and stale warning; clear and remove; disabled |
+
+The CandidatesWorkspace test now also checks that the LeetCode section opens.
+
+### End-to-end through the running backend (manual workflow; no LeetCode contact)
+
+| Action | Result |
+|---|---|
+| Status / capabilities | `manual_self_reported`, `platform_api: unavailable`, `sync_supported: false`, `contacts_leetcode: false`, both sources |
+| 5 invalid inputs | `unsupported_domain` ×2 (`leetcode.cn`, `169.254.169.254`), `not_a_profile` ×2 (problem URL, `/graphql`), `invalid_username` |
+| Link | 201, `not_applicable` / `unavailable` / `unverified`, `evidence: null`, 2 warnings |
+| `POST …/sync` | 404 |
+| Inconsistent evidence | 422 "easy + medium + hard solved must equal total solved"; note not echoed |
+| Save evidence | 200, `self_reported` / `not_verified`, rev 1, total 300, contest `not_collected` / `null`, full provenance |
+| Freshness | as_of 2026-11-01, 11 days, not stale (threshold 30) |
+| Replace | rev 2, total `null` (not provided), attended `0` (real zero), recruiter |
+| Clear / remove | 204 → evidence null / 204 → 404 |
+| DB row | `not_applicable`, `unavailable`, `collected_data` and `collected_at` null, `self_reported_data` `not_verified` |
+| Backend log (31 lines, DEBUG) | **0 outbound HTTP lines**, no LeetCode request, private note absent |
+| Cleanup | candidate deleted |
+
+### Coverage gaps (honest)
+
+- The IntegrityError race on two simultaneous links for one candidate is not exercised (the unique constraint still enforces it).
+
+---
+
+## Phase 3: Codeforces Developer Profile Integration (2026-11-12)
+
+**Environment:** your PostgreSQL 18 (live tests in random temporary schemas), Memurai 8.2, Python 3.12.16, Node 24. Codeforces API reachable (public methods, no key).
+
+### Summary
+
+| Check | Command | Result |
+|---|---|---|
+| Backend format / lint | `uv run ruff format --check .` / `uv run ruff check .` | ✅ 119 files / all checks passed |
+| Backend types | `uv run mypy` (strict) | ✅ 0 issues in 118 source files |
+| Backend unit | `uv run pytest -q` | ✅ **841 passed** |
+| Backend live (PostgreSQL) | `INTEGRATION_DATABASE_URL=… uv run pytest -m integration -rs` | ✅ **99 passed, 6 skipped** (2 real-Codeforces opt-in, 2 real-GitHub opt-in, 2 Groq) |
+| Backend combined | `uv run pytest -m "" --cov` | ✅ **940 passed, 6 skipped, 96%** |
+| **Real Codeforces API** | `INTEGRATION_CODEFORCES_LIVE=1 uv run pytest -m integration tests/integration/test_codeforces_real_api.py -v` | ✅ **2 passed** (real network, paced) |
+| Migration | `uv run alembic current` / `check` | ✅ `0004_developer_profile_sync (head)`, no new operations (no Phase 3 migration) |
+| Frontend lint / typecheck | `npm run lint` / `npm run typecheck` | ✅ |
+| Frontend tests | `npm test` | ✅ **172 passed** (14 files) |
+| Frontend build | `npm run build` | ✅ `/`, `/_not-found`, `/candidates`, `/job-descriptions`, `/resumes` |
+| GitHub / resume / JD regressions | (included above) | ✅ none |
+
+One pre-existing warning appears in the run: a Starlette deprecation emitted when two Phase 0 tests import `fastapi.testclient`. It is unrelated to this phase.
+
+### Coverage of the Codeforces modules (combined run)
+
+| Module | Coverage |
+|---|---|
+| `schemas/codeforces.py`, `services/codeforces/{analytics,collector,normalize,validation}.py` | 100% |
+| `services/codeforces/sync.py` | 99% |
+| `api/v1/codeforces.py` | 98% (IntegrityError race on concurrent adds not exercised) |
+| `integrations/codeforces.py` | 98% (network-error retry-then-success branch not exercised) |
+
+### New tests
+
+| File | Tests | Covers |
+|---|---|---|
+| `test_codeforces_validation.py` | 58 | 16 valid forms (URL variants, `-is-this-fft-`, full-width homoglyphs); 40 rejections including SSRF (`169.254.169.254`, `localhost`, `[::1]`, `codeforces.com@host`, look-alike and sub-domains, `codeforces.ru`, ports, credentials, `file:`/`javascript:`/`ftp:`), contest, problem, blog and submission URLs, encoded paths, `;`, NUL/DEL, length; no echo of input |
+| `test_codeforces_client.py` | 34 | fixed URL and headers (no auth); method allow-list; parameter encoding; FAILED not found / other / no comment; malformed bodies (HTML, no status, list, no result, empty, 403 text); call limit retried with backoff ≥ 2 s and exhausted; 429; 5xx retry then success and exhaustion; FAILED 5xx not retried; timeout and network errors; redirects (same API followed once; foreign, http, other port, non-API path, relative and second redirect refused); **pacing** (2 s between calls, no wait when already elapsed, concurrent calls serialised) |
+| `test_codeforces_collector.py` | 63 | user normalisation (drops e-mail, VK/OpenID, avatar; unrated; bad timestamps); rating changes (delta, gym URL, malformed); submissions (keys, URLs, practice relative time, judging, gym/problemset/name-only keys, unsafe index, tag cleaning, **no team-mate handles**, malformed); **analytics** (submissions vs unique problems, accepted vs unique accepted, rejected and pending, difficulty and tag counted once per problem, verdicts, languages, months, contests, empty, order-independent); collection (3 calls, provenance on every section, no private data, canonical handle, unrated warning, empty account, malformed counted); **limits and paging** (truncation detection with limit + 1, exact limit, multi-page, short page, hard max 1000, duplicates across pages, API ignoring `from`); **partial failures** (rating error → `rated_contests` null; submissions error → statistics null, not zero; rate limit skips later calls; later page failure keeps items; unexpected payload); profile not found, incomplete user, rate limit |
+| `test_codeforces_api.py` | 35 | URL input → 202 and scheduled; 6 invalid inputs → 422 with **zero network calls**; schema; disabled (503, stored data still readable); unknown candidate; duplicates; analytics and freshness in GET; stale snapshot; unreadable snapshot; sync, 409 while running, stale running sync restartable; **retry only after failure** (409 `not_failed`, 202 keeps the previous data); submissions paging and filters; rating history; listings before collection; delete; DB down on 7 endpoints → 503 without driver details; 404s; status without probing; status reports last error; capabilities |
+| `test_codeforces_sync.py` | 12 | success (canonical handle, external id); handle change warning; other-candidate warning; disabled → no network; unknown user → unavailable; failure without data → failed; **failed retry preserves the previous snapshot** (rate limit, API error); unexpected error keeps the snapshot; DB lost while recording; crash logged not raised; missing or other-platform rows ignored |
+| `test_config.py` (Codeforces) | 6 | defaults; enablement; interval < 2 s, limit > 1000 or 0, timeout 0 and retries 9 rejected |
+| `test_codeforces_workflow_live.py` | 14 | PostgreSQL: add → sync → retrieve (row fields, provenance, analytics); **e-mail and team-mate handles absent from responses and stored JSONB**; listings; case-insensitive duplicate; unknown user → unavailable; rate-limited then `/retry` succeeds (then 409); **failed refresh preserves the stored snapshot, `collected_at` and API output**; partial sync keeps unknowns null; truncated window flagged; 409 while in progress; same account on two candidates; **GitHub and Codeforces coexist** (deleting one leaves the other); delete, re-add and candidate cascade; logs free of private data |
+| `test_codeforces_real_api.py` | 2 | **Real Codeforces:** `tourist` collected (limit 20, sections valid, provenance, statistics consistent, no e-mail pattern, no `members`/`source` keys, ≤ 4 requests); unknown handle → not found |
+| `frontend/src/lib/codeforces.test.ts` | 16 | parsers (collected, unavailable statistics stay null, not collected, 5 rejections, status), client input checks, calls (raw value posted, validation code surfaced, `/retry` vs `/sync`, DELETE 204) |
+| `frontend/src/components/codeforces/CodeforcesSection.test.tsx` | 8 | connect → poll → rating, rank, organisation, "not a complete measure" notice, window text and truncation notice, unique vs attempted, difficulty (incl. Unrated), topics, languages, contest link and negative delta, problem link, monthly activity, warning, pacing note; client and server validation; failed sync keeps data and retries via `/retry`; unavailable submissions explained (no zero tiles); stale data; remove; disabled |
+
+The existing CandidatesWorkspace test now also checks that the Codeforces section opens.
+
+### Real Codeforces API: end-to-end through the running backend
+
+`ENABLED_PLATFORMS=github,codeforces` (process variable only), your PostgreSQL:
+
+| Action | Result |
+|---|---|
+| `GET /integrations/codeforces/status` | enabled, 3 methods, 2 s interval, limit 500, 0 requests made |
+| 5 invalid inputs | `unsupported_domain` ×2 (incl. `http://169.254.169.254/latest/meta-data`), `not_a_profile`, `invalid_handle` ×2; still **0 requests** |
+| `POST …/codeforces {"profile":"https://codeforces.com/profile/tourist"}` | 202 → `completed` / `collected` in 5.2 s, **3 API requests**, ownership `unverified`, not stale |
+| Profile / lifetime | rating 3408 / 4009, legendary grandmaster / tourist, registered 2010-02-12, **311 rated contests** |
+| Window | 500 submissions (2025-01-26 to 2026-11-07, truncated plus warning), 357 accepted, **342 unique accepted**, 143 rejected; top tags greedy, math, dp |
+| Sections | profile, rating_history, submissions, analytics: available, each with API method and source URL |
+| `GET …/submissions?verdict=OK&limit=5` | total 357, 5 returned |
+| `GET …/rating-history?limit=3` | total 311, first "Codeforces Beta Round 2" |
+| Duplicate `TOURIST` / `/retry` while completed | 409 `duplicate_profile` / 409 `not_failed` |
+| `POST …/sync` | 202 → `completed`, `collected_at` updated |
+| Unknown handle (second candidate) | `failed` / `invalid_profile` / `unavailable`, `data: null` |
+| Status after the run | `requests_made` 7 (3 + 3 + 1), `last_error` "Codeforces user not found" |
+| Privacy | 0 e-mail addresses in the API response and in the 60-line backend log; no `members`; no submission or problem text in logs |
+| `DELETE …/codeforces` | 204 → GET 404 |
+| Cleanup | both synthetic candidates deleted (cascade) |
+| Frontend production server `/candidates` | 200, Codeforces section present |
+
+Preserving the previous snapshot after a failed sync could not be forced on the real API. It is verified by the unit tests and by the live PostgreSQL test listed above.
+
+### Coverage gaps (honest)
+
+- **Client:** a network error followed by a successful retry is not exercised; timeout-then-success is.
+- **API:** the IntegrityError race on concurrent adds is not exercised.
+- **Sync:** the SQLAlchemy re-raise inside the collection step is not exercised.
+
+---
+
+## Phase 2: GitHub Developer Profile Integration (2026-11-12)
+
+**Environment:** your PostgreSQL 18 (live tests in random temporary schemas), Memurai 8.2, Python 3.12.16, Node 24. GitHub API reachable; **no `GITHUB_TOKEN`** (unauthenticated: 60 core requests/hour, 10 searches/minute).
+
+### Summary
+
+| Check | Command | Result |
+|---|---|---|
+| Backend format / lint | `uv run ruff format --check .` / `uv run ruff check .` | ✅ 102 files / all checks passed |
+| Backend types | `uv run mypy` (strict) | ✅ 0 issues in 101 source files |
+| Backend unit | `uv run pytest -q` | ✅ **633 passed** |
+| Backend live (PostgreSQL) | `INTEGRATION_DATABASE_URL=… uv run pytest -m integration -rs` | ✅ **85 passed, 4 skipped** (2 real-GitHub opt-in, 2 Groq) |
+| Backend combined | `uv run pytest -m "" --cov` | ✅ **718 passed, 4 skipped, 96%** |
+| **Real GitHub API** | `INTEGRATION_GITHUB_LIVE=1 uv run pytest -m integration tests/integration/test_github_real_api.py -v` | ✅ **2 passed** (real network, unauthenticated) |
+| Migration on your DB | `uv run alembic upgrade head` / `current` / `check` | ✅ `0003 → 0004_developer_profile_sync (head)`; no drift |
+| Frontend lint / typecheck | `npm run lint` / `npm run typecheck` | ✅ |
+| Frontend tests | `npm test` | ✅ **148 passed** (12 files) |
+| Frontend build | `npm run build` | ✅ `/`, `/_not-found`, `/candidates`, `/job-descriptions`, `/resumes` |
+| Phase 1A/1B regressions | (included above) | ✅ none |
+
+### Coverage of the GitHub modules (combined run)
+
+| Module | Coverage |
+|---|---|
+| `schemas/github.py` | 100% |
+| `services/github/collector.py` | 98% |
+| `services/github/validation.py` | 98% |
+| `api/v1/github.py` | 95% |
+| `services/github/sync.py` | 95% |
+| `integrations/github.py` | 94% |
+| `services/github/normalize.py` | 94% |
+
+### New tests
+
+| File | Tests | Covers |
+|---|---|---|
+| `test_github_validation.py` | 52 | 15 valid forms; 34 rejections incl. SSRF (`169.254.169.254`, `localhost`, `[::1]`, `github.com@host`, look-alike and sub-domains, ports, credentials, `file:`/`javascript:`/`ftp:`), repository/sub-page URLs, reserved names, encoded slashes, traversal, NUL, length; full-width homoglyph normalisation; no echo of input |
+| `test_github_client.py` | 34 | headers with and without token; unsafe paths; pagination (multi-page, cap and `truncated`, foreign link ignored, non-list payload); redirects (same host followed once; foreign, http, other port and relative refused); 404/451/401/422/403 mapping; primary and 429 rate limits (no waiting); message-only limit; short secondary limit retried; long not; 5xx retry then success and exhaustion; timeout; network error; malformed JSON; **token never in errors or logs**; `/rate_limit` parsing |
+| `test_github_collector.py` | 34 | profile normalisation drops e-mail; missing and malformed fields; unusable or private repositories skipped; README decoding, size cap, excerpt cap, empty, wrong format, binary; events keep counts only (**no commit messages or e-mails**); unknown commit counts stay null; search items; aggregation; full collection; provenance on every section; empty repositories are not missing skills; malformed counted; missing README is `empty`; README limit; **rate limit mid-collection gives a partial snapshot without further calls**; isolated repository failure; incomplete and 422 search; validated login in queries; profile 404, organisation, rate limit and incomplete payload; token mode; configuration switches |
+| `test_github_api.py` | 21 | URL input → 202 and scheduled; 6 invalid inputs → 422 with **zero network calls**; schema validation; disabled integration (503, status not probed); unknown candidate; duplicates (same name case-insensitive, or another profile); DB down on 5 endpoints → 503 without driver details; 404s; status with token (value never shown) and unreachable; capabilities |
+| `test_github_sync.py` | 7 | success; disabled → no network; organisation → unavailable; external-id change warning; unexpected error recorded; DB lost while recording a failure; non-GitHub or missing rows ignored |
+| `test_github_workflow_live.py` | 15 | PostgreSQL: add → sync → retrieve (row fields); **e-mail and commit text absent from the API response and the stored JSONB**; repository filters and paging; listing before collection; case-insensitive duplicate; unknown user → `unavailable`; rate-limited then retry succeeds; **failed retry keeps the previous snapshot**; partial sync warnings; 409 while in progress; canonical login; same account on two candidates; delete, re-add and candidate cascade; candidate list; logs free of private data |
+| `test_github_real_api.py` | 2 | **Real GitHub:** `octocat` collected (sections valid, provenance, no e-mail pattern, ≤ 8 requests); unknown user → not found |
+| `frontend/src/lib/github.test.ts` | 12 | parsers (collected, not collected, 4 rejections, status, candidate page), client input checks, calls (raw value posted, validation code surfaced, DELETE 204) |
+| `frontend/src/components/github/GitHubSection.test.tsx` | 9 | connect → poll → summary, repository links, fork badge, languages, empty topics note, rate-limited badge, "not coding ability" notice, token warning, quota; client validation; server validation message; failed sync keeps data; retry; remove; disabled; candidates workspace create/select; config error |
+
+### Real GitHub API: end-to-end through the running backend
+
+`ENABLED_PLATFORMS=github` (process variable only), unauthenticated:
+
+| Action | Result |
+|---|---|
+| `GET /integrations/github/status` | enabled, reachable, core 60/60, search 10/10 |
+| 4 invalid inputs | `unsupported_domain` ×2 (incl. `http://169.254.169.254/latest`), `not_a_profile`, `invalid_username` |
+| `POST …/github {"profile":"https://github.com/octocat"}` | 202 → `completed` / `collected`, 11 API requests, ownership `unverified` |
+| Snapshot | profile, repositories (8), languages, PRs (8), issues (5): available · topics, activity: empty · calendar: unavailable · all with source URLs |
+| `GET …/repositories?include_forks=false` | 6 |
+| Duplicate `OCTOCAT` | 409 `duplicate_profile` |
+| `POST …/sync` | 202 → `completed`, new `collected_at` |
+| Log and DB scans | 0 e-mail addresses; no `Authorization` in logs |
+| `DELETE …/github` | 204 → GET 404 |
+| Frontend `/candidates` | 200 |
+
+### Coverage gaps (honest)
+
+- **Client:** non-numeric `x-ratelimit` headers, a timeout on the very last retry boundary, and a malformed `/rate_limit` entry are not exercised.
+- **API:** the unreadable-stored-snapshot path and the IntegrityError race on concurrent adds are not exercised.
+- **Sync:** the "sync crashed" outer handler path is not exercised.
+
+---
+
 ## Phase 1B: Job Description Parsing Engine (2026-11-12)
 
 **Environment:** your PostgreSQL 18 (live tests in random temporary schemas), Memurai 8.2, Tesseract 5.4.0, Python 3.12.16, Node 24. **No `GROQ_API_KEY`.**

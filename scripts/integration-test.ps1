@@ -12,9 +12,16 @@
 
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File scripts\integration-test.ps1
+
+.EXAMPLE
+  powershell -ExecutionPolicy Bypass -File scripts\integration-test.ps1 -GitHubLive -CodeforcesLive
+  Also runs the opt-in tests against the real GitHub / Codeforces APIs (network).
 #>
 [CmdletBinding()]
-param()
+param(
+    [switch]$GitHubLive,
+    [switch]$CodeforcesLive
+)
 
 # Native tools write to stderr; check exit codes explicitly (Windows PowerShell 5.1).
 $ErrorActionPreference = "Continue"
@@ -58,12 +65,23 @@ if ($cfg["GROQ_API_KEY"]) {
 } else {
     Write-Host "No GROQ_API_KEY: real-provider LLM tests will be skipped"
 }
+# Real GitHub API tests are opt-in (network): run with  -GitHubLive
+if ($GitHubLive) {
+    $env:INTEGRATION_GITHUB_LIVE = "1"
+    if ($cfg["GITHUB_TOKEN"]) { $env:INTEGRATION_GITHUB_TOKEN = $cfg["GITHUB_TOKEN"] }
+    Write-Host "Real GitHub API tests enabled"
+}
+# Real Codeforces API tests are opt-in (network, paced): run with  -CodeforcesLive
+if ($CodeforcesLive) {
+    $env:INTEGRATION_CODEFORCES_LIVE = "1"
+    Write-Host "Real Codeforces API tests enabled"
+}
 Push-Location $backend
 try {
     uv run pytest -m integration -v -rs
     $code = $LASTEXITCODE
 } finally {
     Pop-Location
-    Remove-Item Env:INTEGRATION_DATABASE_URL, Env:INTEGRATION_REDIS_URL, Env:INTEGRATION_GROQ_API_KEY, Env:INTEGRATION_LLM_MODEL -ErrorAction SilentlyContinue
+    Remove-Item Env:INTEGRATION_DATABASE_URL, Env:INTEGRATION_REDIS_URL, Env:INTEGRATION_GROQ_API_KEY, Env:INTEGRATION_LLM_MODEL, Env:INTEGRATION_GITHUB_LIVE, Env:INTEGRATION_GITHUB_TOKEN, Env:INTEGRATION_CODEFORCES_LIVE -ErrorAction SilentlyContinue
 }
 exit $code

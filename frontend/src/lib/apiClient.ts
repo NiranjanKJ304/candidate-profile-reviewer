@@ -18,7 +18,7 @@ export const UPLOAD_TIMEOUT_MS = 120_000;
 export type FetchResult<T> =
   | { kind: "ok"; data: T; httpStatus: number; requestId: string | null }
   | { kind: "unreachable"; message: string }
-  | { kind: "invalid"; message: string; httpStatus: number | null; code?: string };
+  | { kind: "invalid"; message: string; httpStatus: number | null; code?: string; details?: string[] };
 
 export type Parser<T> = (json: unknown) => T | null;
 
@@ -68,6 +68,15 @@ export function errorEnvelopeCode(json: unknown): string | null {
   return null;
 }
 
+/** Human-readable messages from the error envelope's `details` (e.g. validation errors). */
+export function errorEnvelopeDetails(json: unknown): string[] {
+  if (!isRecord(json) || !isRecord(json.error) || !Array.isArray(json.error.details)) return [];
+  return json.error.details
+    .map((d) => (isRecord(d) && typeof d.msg === "string" ? d.msg : null))
+    .filter((m): m is string => m !== null)
+    .slice(0, 10);
+}
+
 export async function send<T>(
   url: string,
   { method = "GET", body, parse, timeoutMs = DEFAULT_TIMEOUT_MS, acceptStatuses = [] }: SendOptions<T> = {},
@@ -110,11 +119,13 @@ export async function send<T>(
 
   if (!response.ok && !acceptStatuses.includes(response.status)) {
     const code = errorEnvelopeCode(json);
+    const details = errorEnvelopeDetails(json);
     return {
       kind: "invalid",
       message: errorEnvelopeMessage(json) ?? `Unexpected HTTP ${response.status}`,
       httpStatus: response.status,
       ...(code ? { code } : {}),
+      ...(details.length ? { details } : {}),
     };
   }
 

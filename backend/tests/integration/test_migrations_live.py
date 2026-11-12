@@ -34,7 +34,7 @@ async def test_upgrade_creates_tables_and_records_revision(migrated_engine: Asyn
         tables = await conn.run_sync(_tables)
         version = (await conn.execute(text("SELECT version_num FROM alembic_version"))).scalar_one()
     assert tables >= DOMAIN_TABLES
-    assert version == "0003_job_description_parsing"
+    assert version == "0005_self_reported_evidence"
 
 
 async def test_migration_matches_models_exactly(migrated_engine: AsyncEngine) -> None:
@@ -56,6 +56,37 @@ async def test_downgrade_removes_everything_and_upgrade_is_repeatable(
         await conn.run_sync(run_alembic, "upgrade", "head")
     async with migrated_engine.connect() as conn:
         assert await conn.run_sync(_tables) >= DOMAIN_TABLES
+
+
+async def test_self_reported_migration_round_trip_with_data(migrated_engine: AsyncEngine) -> None:
+    """0005 down/up on a populated table: not_applicable rows survive a downgrade."""
+    async with migrated_engine.begin() as conn:
+        cid = (
+            await conn.execute(
+                text("INSERT INTO candidates (full_name) VALUES ('Round Trip') RETURNING id")
+            )
+        ).scalar_one()
+        await conn.execute(
+            text(
+                "INSERT INTO developer_profiles (candidate_id, platform, username, sync_status, "
+                "self_reported_data) VALUES (:cid, 'leetcode', 'jane', 'not_applicable', "
+                '\'{"source_type": "self_reported"}\')'
+            ),
+            {"cid": cid},
+        )
+        await conn.run_sync(run_alembic, "downgrade", "0004_developer_profile_sync")
+        row = (await conn.execute(text("SELECT sync_status FROM developer_profiles"))).one()
+        assert row.sync_status == "pending"
+        cols = {
+            c["name"]
+            for c in await conn.run_sync(lambda c: inspect(c).get_columns("developer_profiles"))
+        }
+        assert "self_reported_data" not in cols
+        await conn.run_sync(run_alembic, "upgrade", "head")
+        with pytest.raises(Exception, match="ck_developer_profiles_sync_status"):
+            async with conn.begin_nested():
+                await conn.execute(text("UPDATE developer_profiles SET sync_status = 'bogus'"))
+        await conn.execute(text("UPDATE developer_profiles SET sync_status = 'not_applicable'"))
 
 
 async def test_upgrade_is_idempotent_at_head(migrated_engine: AsyncEngine) -> None:

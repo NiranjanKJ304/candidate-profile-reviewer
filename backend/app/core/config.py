@@ -108,6 +108,31 @@ class Settings(BaseSettings):
     ocr_language: str = Field(default="eng", pattern=r"^[a-z_]{3,}(\+[a-z_]{3,})*$")
     ocr_dpi: int = Field(default=300, ge=72, le=600)
 
+    # --- GitHub integration (Phase 2; enabled via ENABLED_PLATFORMS=github) -------
+    # Optional token: raises the REST limit from 60 to 5,000 requests/hour. Needs no
+    # scopes (public data only). Never logged or returned.
+    github_token: SecretStr | None = None
+    github_timeout_seconds: float = Field(default=15.0, gt=0, le=120)
+    github_max_retries: int = Field(default=2, ge=0, le=5)
+    github_max_repo_pages: int = Field(default=3, ge=1, le=10)  # x100 repositories
+    github_readme_limit: int = Field(default=10, ge=0, le=50)  # READMEs fetched per sync
+    github_readme_max_bytes: int = Field(default=100_000, ge=1_000, le=1_000_000)
+    github_max_event_pages: int = Field(default=3, ge=0, le=3)  # API caps at 300 events
+    github_search_items: int = Field(default=10, ge=0, le=100)  # recent PRs / issues kept
+
+    # --- Codeforces integration (Phase 3; enabled via ENABLED_PLATFORMS=codeforces) --
+    # Public API methods only (no API key). Codeforces allows about 1 call per
+    # 2 seconds, so requests are paced; the interval cannot be set below 2 s.
+    codeforces_timeout_seconds: float = Field(default=15.0, gt=0, le=120)
+    codeforces_max_retries: int = Field(default=2, ge=0, le=5)
+    codeforces_min_request_interval_seconds: float = Field(default=2.0, ge=2.0, le=30.0)
+    codeforces_submission_limit: int = Field(default=500, ge=1, le=1000)  # hard max 1000
+
+    # --- LeetCode (Phase 4; enabled via ENABLED_PLATFORMS=leetcode) ------------------
+    # No official/permitted API exists, so LeetCode is never contacted. Only manual,
+    # self-reported evidence is stored; it is flagged stale after this many days.
+    leetcode_evidence_stale_after_days: int = Field(default=30, ge=1, le=365)
+
     # --- Job-description upload & parsing (Phase 1B; OCR settings shared) ----------
     job_description_storage_dir: Path = Path("storage/job_descriptions")
     job_description_max_bytes: int = Field(default=5 * 1024 * 1024, ge=1024, le=50 * 1024 * 1024)
@@ -207,6 +232,24 @@ class Settings(BaseSettings):
         if key is None or not key.get_secret_value().strip():
             return None
         return key
+
+    @property
+    def github_enabled(self) -> bool:
+        return Platform.GITHUB in self.enabled_platforms
+
+    @property
+    def codeforces_enabled(self) -> bool:
+        return Platform.CODEFORCES in self.enabled_platforms
+
+    @property
+    def leetcode_enabled(self) -> bool:
+        return Platform.LEETCODE in self.enabled_platforms
+
+    @property
+    def github_token_value(self) -> str | None:
+        if self.github_token is None or not self.github_token.get_secret_value().strip():
+            return None
+        return self.github_token.get_secret_value().strip()
 
     @property
     def llm_resolved_base_url(self) -> str:

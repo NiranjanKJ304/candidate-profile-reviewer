@@ -229,7 +229,72 @@ Each phase is built and tested on its own. Later phases are not started without 
 | 0 | Foundation: config, logging, health, DB/cache wiring, domain models plus initial migration, frontend layout and API client, tests, docs (native services, no Docker) | **Implemented and verified** against native PostgreSQL 18 and Memurai (see TEST_REPORT.md, revision 2). Docker Compose has been written but never run |
 | 1A | Resume parsing engine: upload, validation, extraction, OCR, LLM structuring, storage, APIs, upload UI | **Implemented, not complete**: awaiting one real Groq run (see PROJECT_STATUS.md) |
 | 1B | Job-description parsing: PDF/DOCX/TXT upload, OCR, dedicated LLM prompt with verbatim evidence, required vs preferred skills, grounding, human review and correction | **Implemented, not complete**: awaiting one real Groq run (see PROJECT_STATUS.md) |
-| 2+ | Platform collectors (one per phase), matching, LLM evaluation, reporting, interview questions | Not started; scope agreed per phase |
+| 2 | GitHub developer-profile integration (REST, evidence with provenance, sync, UI) | **Complete and verified** (incl. real GitHub API) |
+| 3 | Codeforces developer-profile integration (official public API, analytics, provenance, sync, UI) | **Complete and verified** (incl. real Codeforces API) |
+| 4 | LeetCode feasibility: no permitted API exists, so a manual self-reported evidence workflow is used (never contacts LeetCode) | **Complete and verified** (manual mode; no real LeetCode API test, by design) |
+| 5+ | Other platforms (one per phase), aggregation, matching, LLM evaluation, reporting, interview questions | Not started; scope agreed per phase |
+
+### GitHub integration (Phase 2)
+
+```
+POST /candidates/{id}/github  -> validation.parse_github_profile()  (username only; URLs never fetched)
+   -> developer_profiles row (unverified, sync pending) -> 202
+   -> background GitHubSyncService.sync()
+        -> GitHubCollector.collect(username)
+             GitHubClient (fixed https://api.github.com, token header optional)
+             /users/{u} -> /users/{u}/repos (Link pages, cap) -> /repos/{o}/{r}/readme (top N)
+             -> /users/{u}/events/public -> /search/issues (PRs, issues)
+             each section: status + note + provenance (source URL, API call, time)
+        -> normalize.* (no e-mails, no commit messages, bounded excerpts)
+        -> row: collected_data snapshot, collected_at, external_id, sync_status, warnings
+```
+
+- Transport (`integrations/github.py`), validation, normalisation, collection and sync (`services/github/`), schemas and routes are separate.
+- Rate limits: the primary limit is never waited out (sections are marked `rate_limited`); short secondary limits and 5xx are retried.
+- A failed retry keeps the last successful snapshot.
+- `ENABLED_PLATFORMS` gates all outbound platform calls.
+
+### Codeforces integration (Phase 3)
+
+```
+POST /candidates/{id}/codeforces -> validation.parse_codeforces_profile()  (handle only; URLs never fetched)
+   -> developer_profiles row (platform codeforces, unverified, sync pending) -> 202
+   -> background CodeforcesSyncService.sync()
+        -> CodeforcesCollector.collect(handle)
+             CodeforcesClient (fixed https://codeforces.com/api/, allow-list of 3 public methods,
+                               one shared pacer: lock + >= 2 s between requests)
+             user.info (required) -> user.rating -> user.status (from/count, limit + 1, page guard)
+             each section: status + note + provenance (source URL, API method, time)
+        -> normalize.* (drops e-mail, VK/OpenID, avatar, team-mates; no source code requested)
+        -> analytics.submission_stats() (collected window) + lifetime values (profile, user.rating)
+        -> row: collected_data snapshot, collected_at, external_id (current handle), sync_status, warnings
+```
+
+- Same separation as GitHub: transport (`integrations/codeforces.py`); validation, normalisation, analytics, collection and sync (`services/codeforces/`); schemas; routes.
+- No migration: `developer_profiles` stores everything. Codeforces has no numeric id, so `external_id` is the current handle in lower case.
+- `status: FAILED` maps to typed errors. "Call limit exceeded", 429, 5xx, timeouts and network errors are retried a bounded number of times. After a rate limit, later methods are skipped.
+- Missing submissions give `null` statistics, never zeros. A failed sync keeps the last successful snapshot.
+- The status endpoint reports configuration and observed state without calling the API.
+- Frontend: `CodeforcesSection` reuses the GitHub section's layout. The shared badge and date helpers live in `components/platform/StatusBadge.tsx`.
+
+### LeetCode: manual self-reported evidence (Phase 4)
+
+**Integration type: manual candidate-submitted evidence. Not official-API based, not authorised-integration based. Automated platform data: unavailable.**
+
+Feasibility (2026-11-13): there is no official API, developer programme or OAuth. The [Terms of Service](https://leetcode.com/terms/) (last modified 04/05/2024) forbid crawling, scraping, spidering and reverse engineering, and [robots.txt](https://leetcode.com/robots.txt) disallows `/graphql`, `/api/` and `/submissions`. Third-party wrappers rely on the internal, undocumented GraphQL endpoint, often with session cookies. The findings are kept in `services/leetcode/feasibility.py` and served by `GET /integrations/leetcode/status`.
+
+```
+POST /candidates/{id}/leetcode -> validation.parse_leetcode_profile()  (stored only; never fetched or checked)
+   -> developer_profiles row: collection_status=unavailable, sync_status=not_applicable, ownership=unverified
+PUT  /candidates/{id}/leetcode/evidence -> LeetCodeEvidenceInput (strict, cross-field rules)
+   -> evidence.build_evidence(): every section {status, note, provenance: self_reported / not_verified /
+      manual_entry / reported_by / claimed_profile_url / submitted_at}; not provided -> null + not_collected
+   -> self_reported_data, self_reported_at   (collected_data / collected_at stay NULL)
+```
+
+- **Structural separation (migration 0005):** self-reported evidence has its own columns, so aggregation in later phases cannot confuse it with platform-collected evidence. The stored schema accepts only `self_reported` / `not_verified`, and the frontend parser rejects anything else.
+- **No network path:** LeetCode modules import no HTTP client, and tests enforce this plus the absence of any LeetCode endpoint, cookie or session string. API and live tests fail on any outbound request.
+- **No sync or retry endpoints**, because no permitted source exists. Freshness comes from the "as of" date (stale after 30 days, configurable).
 
 ### Resume pipeline (Phase 1A)
 
@@ -272,7 +337,8 @@ phase:
 
 | Platform | Expected source |
 |---|---|
-| GitHub | Official REST/GraphQL API |
-| Codeforces | Official public API |
+| GitHub | Official REST/GraphQL API: **implemented in Phase 2** (REST) |
+| Codeforces | Official public API: **implemented in Phase 3** (`user.info`, `user.rating`, `user.status`; no key) |
+| LeetCode | **No official or permitted API** (terms forbid scraping; robots.txt disallows `/graphql`, `/api/`). **Phase 4: manual self-reported evidence only**, never contacted |
 | Kaggle | Official API (requires the user's API token) |
-| LeetCode, HackerRank, CodeChef | No documented public profile API known. Options: skip, candidate-supplied evidence, or mark as "unavailable" |
+| HackerRank, CodeChef | No documented public profile API known. Options: skip, candidate-supplied evidence, or mark as "unavailable" (to be investigated in their own phases) |

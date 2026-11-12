@@ -31,11 +31,33 @@ class ResumeCapability(BaseModel):
     accepted_extensions: list[str]
 
 
+class GitHubCapability(BaseModel):
+    enabled: bool
+    authenticated: bool
+    accepted_inputs: list[str]
+
+
+class CodeforcesCapability(BaseModel):
+    enabled: bool
+    accepted_inputs: list[str]
+    submission_limit: int
+
+
+class LeetCodeCapability(BaseModel):
+    enabled: bool
+    integration_mode: str
+    sync_supported: bool
+    accepted_inputs: list[str]
+
+
 class Capabilities(BaseModel):
     llm: LLMCapability
     ocr: OCRCapability
     resume: ResumeCapability
     job_description: ResumeCapability
+    github: GitHubCapability
+    codeforces: CodeforcesCapability
+    leetcode: LeetCodeCapability
 
 
 @router.get(
@@ -68,6 +90,22 @@ async def capabilities(
             max_bytes=settings.resume_max_bytes,
             max_pages=settings.resume_max_pages,
             accepted_extensions=[".pdf", ".docx"],
+        ),
+        github=GitHubCapability(
+            enabled=settings.github_enabled,
+            authenticated=settings.github_token_value is not None,
+            accepted_inputs=["username", "https://github.com/{username}"],
+        ),
+        codeforces=CodeforcesCapability(
+            enabled=settings.codeforces_enabled,
+            accepted_inputs=["handle", "https://codeforces.com/profile/{handle}"],
+            submission_limit=settings.codeforces_submission_limit,
+        ),
+        leetcode=LeetCodeCapability(
+            enabled=settings.leetcode_enabled,
+            integration_mode="manual_self_reported",
+            sync_supported=False,
+            accepted_inputs=["username", "https://leetcode.com/u/{username}/"],
         ),
         job_description=ResumeCapability(
             max_bytes=settings.job_description_max_bytes,

@@ -217,3 +217,43 @@ class TestLLMAndResumeSettings:
     ) -> None:
         with pytest.raises(ValidationError):
             make_settings(**{field: value})
+
+
+class TestCodeforcesSettings:
+    def test_defaults_and_enablement(self, make_settings: SettingsFactory) -> None:
+        settings = make_settings()
+        assert settings.codeforces_enabled is False
+        assert settings.codeforces_submission_limit == 500
+        assert settings.codeforces_min_request_interval_seconds == 2.0
+        enabled = make_settings(enabled_platforms="codeforces")
+        assert enabled.codeforces_enabled is True
+        assert enabled.github_enabled is False
+
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [
+            ("codeforces_min_request_interval_seconds", 1.0),  # Codeforces asks for >= 2 s
+            ("codeforces_submission_limit", 1001),  # hard maximum
+            ("codeforces_submission_limit", 0),
+            ("codeforces_timeout_seconds", 0),
+            ("codeforces_max_retries", 9),
+        ],
+    )
+    def test_rejects_invalid_values(
+        self, make_settings: SettingsFactory, field: str, value: object
+    ) -> None:
+        with pytest.raises(ValidationError):
+            make_settings(**{field: value})
+
+
+class TestLeetCodeSettings:
+    def test_defaults_and_enablement(self, make_settings: SettingsFactory) -> None:
+        assert make_settings().leetcode_enabled is False
+        settings = make_settings(enabled_platforms="leetcode")
+        assert settings.leetcode_enabled is True
+        assert settings.leetcode_evidence_stale_after_days == 30
+
+    @pytest.mark.parametrize("value", [0, 366])
+    def test_rejects_invalid_staleness(self, make_settings: SettingsFactory, value: int) -> None:
+        with pytest.raises(ValidationError):
+            make_settings(leetcode_evidence_stale_after_days=value)

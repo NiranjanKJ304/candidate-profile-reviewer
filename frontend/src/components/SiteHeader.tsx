@@ -25,6 +25,9 @@ export default function SiteHeader() {
           <Link href="/job-descriptions" className="hover:text-zinc-900 dark:hover:text-zinc-100">
             Job descriptions
           </Link>
+          <Link href="/candidates" className="hover:text-zinc-900 dark:hover:text-zinc-100">
+            Candidates
+          </Link>
           {API_BASE_URL && (
             <a
               href={`${API_BASE_URL}/docs`}

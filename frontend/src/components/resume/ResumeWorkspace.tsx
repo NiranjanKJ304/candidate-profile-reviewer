@@ -16,6 +16,10 @@ import {
   uploadResume,
 } from "@/lib/resumes";
 
+import CodeforcesSection from "@/components/codeforces/CodeforcesSection";
+import GitHubSection from "@/components/github/GitHubSection";
+import LeetCodeSection from "@/components/leetcode/LeetCodeSection";
+
 import ParsedResumeView from "./ParsedResumeView";
 
 const DEFAULT_MAX_BYTES = 10 * 1024 * 1024;
@@ -317,6 +321,10 @@ export default function ResumeWorkspace({ apiBaseUrl, pollIntervalMs = 1500 }: P
           )}
 
           {resume.parsed_data && <ParsedResumeView data={resume.parsed_data} />}
+
+          <GitHubSection api={api} candidateId={resume.candidate_id} pollIntervalMs={pollIntervalMs} />
+          <CodeforcesSection api={api} candidateId={resume.candidate_id} pollIntervalMs={pollIntervalMs} />
+          <LeetCodeSection api={api} candidateId={resume.candidate_id} />
         </section>
       )}
     </div>

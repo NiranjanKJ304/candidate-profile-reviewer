@@ -87,6 +87,49 @@ class CollectionStatus(StrEnum):
     FAILED = "failed"
 
 
+class SyncStatus(StrEnum):
+    """Lifecycle of one developer-profile synchronisation run."""
+
+    PENDING = "pending"
+    PROCESSING = "processing"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    # The platform offers no permitted data source (e.g. LeetCode): nothing will sync.
+    NOT_APPLICABLE = "not_applicable"
+
+
+class CollectionErrorCode(StrEnum):
+    """Why a developer-profile synchronisation failed (stored on the profile)."""
+
+    INVALID_PROFILE = "invalid_profile"  # account does not exist / not accessible
+    NOT_A_USER = "not_a_user"  # e.g. a GitHub organisation, not a person
+    RATE_LIMITED = "rate_limited"
+    PERMISSION_DENIED = "permission_denied"
+    AUTH_FAILED = "auth_failed"  # configured token rejected
+    NETWORK_ERROR = "network_error"
+    TIMEOUT = "timeout"
+    API_ERROR = "api_error"
+    INTEGRATION_DISABLED = "integration_disabled"
+    INTERNAL_ERROR = "internal_error"
+
+
+class AvailabilityStatus(StrEnum):
+    """Outcome for one collected data category (profile, repositories, ...).
+
+    Keeps "nothing there" (``empty``) distinct from "could not be obtained"
+    (``unavailable``, ``rate_limited``, ...). Neither is evidence of a missing skill.
+    """
+
+    AVAILABLE = "available"
+    EMPTY = "empty"
+    UNAVAILABLE = "unavailable"  # not offered by the API / not public
+    PERMISSION_DENIED = "permission_denied"
+    RATE_LIMITED = "rate_limited"
+    NETWORK_ERROR = "network_error"
+    ERROR = "error"
+    NOT_COLLECTED = "not_collected"  # skipped (limits, earlier failure)
+
+
 class EvaluationStatus(StrEnum):
     PENDING = "pending"
     RUNNING = "running"

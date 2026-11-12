@@ -33,16 +33,20 @@ def _sql(revision: str, downgrade: bool = False) -> str:
 
 def test_single_linear_head() -> None:
     script = ScriptDirectory.from_config(_config())
-    assert script.get_heads() == ["0003_job_description_parsing"]
+    assert script.get_heads() == ["0005_self_reported_evidence"]
     revisions = list(script.walk_revisions())
     assert [r.revision for r in revisions] == [
+        "0005_self_reported_evidence",
+        "0004_developer_profile_sync",
         "0003_job_description_parsing",
         "0002_resume_parsing",
         "0001_initial_schema",
     ]
-    assert revisions[0].down_revision == "0002_resume_parsing"
-    assert revisions[1].down_revision == "0001_initial_schema"
-    assert revisions[2].down_revision is None
+    assert revisions[0].down_revision == "0004_developer_profile_sync"
+    assert revisions[1].down_revision == "0003_job_description_parsing"
+    assert revisions[2].down_revision == "0002_resume_parsing"
+    assert revisions[3].down_revision == "0001_initial_schema"
+    assert revisions[4].down_revision is None
 
 
 @pytest.fixture(scope="module")
@@ -126,3 +130,25 @@ def test_job_description_migration_downgrade_sql() -> None:
     sql = _sql("0003_job_description_parsing:0002_resume_parsing", downgrade=True)
     assert "ALTER TABLE job_descriptions DROP COLUMN reviewed_data" in sql
     assert "ALTER COLUMN title SET NOT NULL" in sql
+
+
+def test_developer_profile_sync_migration_sql() -> None:
+    sql = _sql("0003_job_description_parsing:0004_developer_profile_sync")
+    assert "ALTER TABLE developer_profiles ADD COLUMN external_id VARCHAR(64)" in sql
+    assert "ADD COLUMN sync_status VARCHAR(20) DEFAULT 'pending' NOT NULL" in sql
+    assert "ADD CONSTRAINT ck_developer_profiles_sync_error_code CHECK" in sql
+    assert "CREATE INDEX ix_developer_profiles_platform_external_id" in sql
+    down = _sql("0004_developer_profile_sync:0003_job_description_parsing", downgrade=True)
+    assert "ALTER TABLE developer_profiles DROP COLUMN sync_status" in down
+
+
+def test_self_reported_evidence_migration_sql() -> None:
+    sql = _sql("0004_developer_profile_sync:0005_self_reported_evidence")
+    assert "ALTER TABLE developer_profiles ADD COLUMN self_reported_data JSONB" in sql
+    assert "ADD COLUMN self_reported_at TIMESTAMP WITH TIME ZONE" in sql
+    assert "DROP CONSTRAINT ck_developer_profiles_sync_status" in sql
+    assert "'not_applicable'" in sql
+    down = _sql("0005_self_reported_evidence:0004_developer_profile_sync", downgrade=True)
+    assert "SET sync_status = 'pending' WHERE sync_status = 'not_applicable'" in down
+    assert "DROP COLUMN self_reported_data" in down
+    assert "'not_applicable'" not in down.split("ADD CONSTRAINT", 1)[1]

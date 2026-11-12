@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import uuid
+from typing import Annotated
 
-from fastapi import APIRouter, HTTPException, Response, status
-from sqlalchemy import select
+from fastapi import APIRouter, HTTPException, Query, Response, status
+from pydantic import BaseModel
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
 from app.api.deps import SessionDep
@@ -14,6 +16,13 @@ from app.schemas.common import ErrorResponse
 from app.schemas.domain import CandidateCreate, CandidateRead, ResumeRead
 
 router = APIRouter(prefix="/candidates", tags=["candidates"])
+
+
+class CandidatePage(BaseModel):
+    items: list[CandidateRead]
+    total: int
+    limit: int
+    offset: int
 
 
 async def load_candidate(session: SessionDep, candidate_id: uuid.UUID) -> Candidate:
@@ -45,6 +54,24 @@ async def create_candidate(
     await session.refresh(candidate)
     response.headers["Location"] = f"/api/v1/candidates/{candidate.id}"
     return candidate
+
+
+@router.get("", response_model=CandidatePage, summary="List candidates (newest first)")
+async def list_candidates(
+    session: SessionDep,
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> CandidatePage:
+    total = await session.scalar(select(func.count()).select_from(Candidate)) or 0
+    rows = await session.execute(
+        select(Candidate).order_by(Candidate.created_at.desc()).limit(limit).offset(offset)
+    )
+    return CandidatePage(
+        items=[CandidateRead.model_validate(c) for c in rows.scalars()],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
 
 
 @router.get(

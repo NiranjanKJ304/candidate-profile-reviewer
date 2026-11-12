@@ -1,5 +1,140 @@
 # Development Log
 
+## Phase 4: LeetCode Feasibility and Safe Implementation · 2026-11-13
+
+**Status:** ✅ Complete and verified **as a manual, self-reported evidence workflow**. No LeetCode API is used, because no official or permitted one exists. No real LeetCode API test was run, and none is claimed.
+
+### 1. Feasibility investigation (done before writing any code)
+
+| Question | Finding | Source |
+|---|---|---|
+| Official documented public profile API? | **No.** Searches found no LeetCode developer portal, API documentation, OAuth or partner programme, only third-party wrappers | Web searches 2026-11-13 (results: npm `leetcode-query`, PyPI `python-leetcode`, community MCP servers, paid scraping services) |
+| What do the wrappers use? | LeetCode's **internal, undocumented** GraphQL endpoint (`/graphql`). Several need the user's `LEETCODE_SESSION` cookie and CSRF token | Same packages' documentation |
+| Terms | *USE OF SERVICES - Restrictions*: crawling, scraping or spidering any part of the Service, and decompiling or reverse engineering it, are "strictly forbidden". Processes that run while you are not logged in, or that place undue load, are not allowed. No API or permitted-automation clause exists. "Last modified: 04/05/2024" | https://leetcode.com/terms/ (read 2026-11-13) |
+| robots.txt | `Disallow: /graphql`, `/api/`, `/*/api`, `/submissions` (and others) for `User-agent: *`. `/u/` is not listed, but the terms still forbid scraping | https://leetcode.com/robots.txt (read 2026-11-13) |
+| Candidate authorisation possible? | Only by asking for session cookies or passwords, which the phase rules forbid and the terms do not permit | |
+| Stability | The GraphQL schema is internal and can change without notice | |
+
+**Decision.** There is no stable, permitted API, so I implemented the specified fallback: a safe manual evidence workflow. It never contacts LeetCode; evidence is labelled self-reported and not verified; platform data is reported as `unavailable` with the reason and sources.
+
+### 2. Design
+
+- **Migration `0005_self_reported_evidence`** (necessary). It adds `developer_profiles.self_reported_data` (JSONB) and `self_reported_at`, so self-reported data is structurally separate from `collected_data` and cannot be mistaken for platform-collected evidence in later aggregation. It also adds `sync_status = not_applicable` (CHECK constraint updated), so LeetCode rows do not claim a pending sync that will never happen. Downgrade resets those rows to `pending` and drops the columns; it was tested on a populated table. Applied to your database; `alembic check` shows no drift.
+- `app/services/leetcode/feasibility.py`: the findings and sources, served by the status endpoint and shown in the UI.
+- `app/services/leetcode/validation.py`: username and profile URL parsing (current `/u/{name}` and legacy `/{name}`, reserved page names, `leetcode.cn` rejected). The result is never sent anywhere.
+- `app/schemas/leetcode.py`: strict evidence input (bounds, strict integers, cross-field consistency, duplicates, dates, control characters); the stored `LeetCodeEvidence` with `Literal` labels (`self_reported`, `not_verified`) and per-section provenance; the responses.
+- `app/services/leetcode/evidence.py`: a pure builder. Not provided means `null` and `not_collected` ("not provided: unknown, not zero"). It also counts revisions and computes age.
+- `app/api/v1/leetcode.py`: link (201), get, put evidence, clear evidence, remove, status. No sync or retry. Capabilities report the mode. New setting `LEETCODE_EVIDENCE_STALE_AFTER_DAYS` (default 30).
+- Frontend:
+  - `lib/leetcode.ts`: parsers that reject any payload claiming verification, and a form-to-payload converter in which empty means omitted, never zero;
+  - `components/leetcode/LeetCodeSection.tsx`;
+  - the section is added to `/candidates` and the resume view.
+  - `apiClient` now passes on the error envelope's `details[].msg`, so specific validation reasons are shown. The change is backwards compatible.
+
+### 3. Defects found and fixed during the phase
+
+1. **Field name shadowing a type.** A Pydantic field named `date` would shadow `date` in the class namespace, so it was renamed to `contest_date` before testing.
+2. **Booleans accepted as integers.** Pydantic's lax mode accepted `true` as `1` for counts, and `true` for the percentage. These fields are now strict. Found by a test.
+3. **Timezone edge case (found in the end-to-end run).** "Not in the future" compared against the UTC date, so before 05:30 IST today's local date was rejected. One day of leeway now applies, with a test.
+4. **Lint (PT019, RUF012) and one TypeScript tuple-index error in a test**, fixed.
+
+**Not done (by instruction):** HackerRank, CodeChef, Kaggle, aggregation, scoring, reports, interview questions, authentication.
+
+---
+
+## Phase 3: Codeforces Developer Profile Integration · 2026-11-12
+
+**Status:** ✅ Complete and verified, including the real Codeforces API through the running backend and your PostgreSQL.
+
+**Inspected first.** I read the five docs, the GitHub client, collector, sync service, routes and schemas, `developer_profiles`, the settings, the dependency wiring, the frontend GitHub section and the test fakes. Phase 3 follows the same structure: transport, then validation, normalisation and collection, then background sync, then thin routes.
+
+**No migration.** `developer_profiles` already holds everything needed: the platform, the handle in `username`, the sync lifecycle and errors, `collected_at` and `last_sync_attempt_at`, and the JSONB snapshot. Codeforces has no numeric account id, but `user.info` resolves former handles to the current one, so `external_id` stores the lower-cased current handle. That value is used to detect the same account linked to several candidates. The schema is still at `0004`, and `alembic check` shows no drift.
+
+**Before writing fakes, I checked the real API shapes** with one small collection of `tourist` (3 calls, 5 submissions). What it showed:
+- `author.members` carries team-mate handles, so they are dropped.
+- New problems have no `rating`, which is stored as null.
+- Practice submissions report `relativeTimeSeconds = 2147483647`, which is stored as null.
+- An unknown handle returns `status: FAILED` with a "not found" comment.
+
+**New modules**
+- `app/integrations/codeforces.py`: the client.
+  - The base URL is a constant, and only three public methods are allow-listed. Parameters are encoded by httpx.
+  - One shared pacer (asyncio lock plus a minimum interval, at least 2 s) covers all syncs.
+  - Bounded retries with backoff for 5xx, timeouts, network errors and "Call limit exceeded"/429.
+  - `FAILED` responses map to typed errors.
+  - Redirects are followed only within `/api/`.
+  - It records the last success and last error for the status endpoint, so that endpoint never needs to call Codeforces.
+- `app/services/codeforces/validation.py`: parses a handle or `/profile/{handle}` URL. NFKC normalisation, strict host allow-list, rejects encoded paths and `;`.
+- `normalize.py`: tolerant normalisation that drops e-mail, VK/OpenID ids, avatar and team-mates. Builds problem and contest URLs only from integers and a safe index.
+- `analytics.py`: deterministic statistics with documented definitions. Each accepted problem is counted once for the rating and tag distributions.
+- `collector.py`:
+  - `user.info` is required.
+  - `user.rating` and `user.status` fail independently. After a rate limit, later calls are skipped.
+  - Bounded `user.status` paging asks for limit + 1 to detect truncation, has a page guard in case `from` is ignored, and drops duplicate ids.
+  - Statistics are `null` when submissions are missing.
+- `sync.py`: same contract as GitHub. It keeps the last good snapshot on failure, records the canonical handle and handle changes, and warns when the account is linked to another candidate.
+- `app/schemas/codeforces.py` and `app/api/v1/codeforces.py`: add, get (with freshness), sync, retry (only after a failure), submissions, rating history, delete, status. Capabilities report Codeforces. New settings `CODEFORCES_*`: the interval cannot go below 2 s and the limit cannot exceed 1000.
+- Frontend:
+  - `lib/codeforces.ts`;
+  - `components/codeforces/CodeforcesSection.tsx`;
+  - `components/platform/StatusBadge.tsx`, the badge and date helpers extracted from the GitHub section, which now uses them (no visual change);
+  - the section is added to `/candidates` and under an uploaded resume.
+- `scripts/integration-test.ps1 -CodeforcesLive` opts into the real-API tests.
+
+**Defects found and fixed during the phase**
+1. **mypy `no-any-return`** in the backoff calculation (`2 ** n`); fixed with an explicit float.
+2. **Unbounded paging risk.** If the API ever ignored `from`, the de-duplicated page loop would never grow and never stop. A page guard (`limit // page_size + 2`) now marks the window truncated. A test covers it.
+3. **Lint (PT018, RUF001).** Compound asserts were split, and the full-width homoglyph test input is now built with `chr()` instead of literal characters.
+4. **E2E script.** The database privacy scan and cleanup step could not import the app from the scratchpad, so I re-ran it with `PYTHONPATH`. The API checks had already completed.
+5. **`.gitignore` hid two frontend routes (pre-existing, found in the final integrity check).** The PII rules `candidates/` and `**/resumes/` also matched `frontend/src/app/candidates/` (Phase 2) and `frontend/src/app/resumes/` (Phase 1A). As a result, **the `/resumes` page is missing from the commit already pushed to GitHub**, and `/candidates` could never have been committed. Two narrow exceptions (`!frontend/src/app/candidates/`, `!frontend/src/app/resumes/`) fix this. I verified that `storage/`, `candidates/`, `resumes/`, `backend/storage/resumes/` and PDFs (even inside those route folders) are still ignored.
+
+**Not done (by instruction):** LeetCode, HackerRank, CodeChef, Kaggle, multi-platform aggregation, LLM scoring, reports, interview questions, authentication.
+
+---
+
+## Phase 2: GitHub Developer Profile Integration · 2026-11-12
+
+**Status:** ✅ Complete and verified, including the real GitHub API (unauthenticated) through the live backend and your PostgreSQL.
+
+**Inspected first.**
+- `developer_profiles` already had platform, username, profile URL, ownership and collection statuses, a JSON snapshot, source URL, `collected_at`, and one profile per platform per candidate. It was reused.
+- `ENABLED_PLATFORMS` (from Phase 0) gates the integration, so no outbound calls happen unless `github` is listed. It is empty in your `backend/.env`, and the example now sets `github`.
+
+**One migration was necessary (`0004_developer_profile_sync`).** The existing columns could not represent an in-progress or failed sync, its reason and warnings, or the stable GitHub account id needed for rename detection. It adds `external_id`, `sync_status` (NOT NULL, default `pending`), `sync_error_code`, `sync_error`, `sync_warnings` (JSONB), `last_sync_attempt_at`, two CHECK constraints and an index on (`platform`, `external_id`). It was applied to your database, and `alembic check` reports no drift.
+
+**New modules**
+- `app/integrations/github.py`: REST client.
+  - The base URL is a constant; paths take only URL-encoded validated segments and reject `//`, `..` and `\`.
+  - Redirects and pagination links are followed only to `https://api.github.com`.
+  - Timeouts, retries with backoff (5xx, network, secondary limit ≤ 10 s) and Link pagination with a page cap.
+  - Rate-limit header tracking and `rate_limit_status()`.
+  - Typed errors that map to `CollectionErrorCode` and `AvailabilityStatus`.
+  - The optional `GITHUB_TOKEN` is sent only as a header.
+- `app/services/github/validation.py`: username/URL parser (NFKC-normalised, strict host allow-list, reserved paths, one path segment).
+- `app/services/github/normalize.py`: tolerant normalisation; skips unusable or private repositories; never copies e-mails or commit messages; bounded README excerpts; event summaries contain counts only.
+- `app/services/github/collector.py`: profile (required) → repositories → READMEs → derived languages and topics → public events → PR and issue search. Sections fail independently. Once the core limit is hit, later core sections are marked `rate_limited` without further calls. The contribution calendar is marked unavailable (GraphQL only).
+- `app/services/github/sync.py`: background sync. It records the outcome, keeps the last good snapshot on failure, uses the canonical login, detects renames and account changes via `external_id`, warns when the account is linked to another candidate, and never changes ownership.
+- `app/schemas/github.py`: snapshot with per-section provenance, plus the API schemas.
+- `app/api/v1/github.py`: add, get, sync, repositories, delete, integration status. `candidates.py` gained `GET /candidates`. Capabilities report GitHub. New settings `GITHUB_*` (see `backend/.env.example`).
+- Frontend:
+  - `lib/github.ts`: runtime-validated types and calls;
+  - `components/github/GitHubSection.tsx`: input, connect, polling, summary, repositories, languages and topics, activity, PR/issue totals, warnings, failure explanations, retry, remove, "ownership not verified" and "counts are not ability" notices;
+  - `components/candidate/CandidatesWorkspace.tsx` and the `/candidates` page;
+  - the section is also embedded under an uploaded resume; navigation link added.
+- `scripts/integration-test.ps1 -GitHubLive` opts into the real-API tests.
+
+**Defects found and fixed during the phase**
+1. **Pagination placeholder.** My first client draft never read the `Link` header. I caught it before testing; the header is now carried on the response and parsed.
+2. **`//` path segments.** A path starting with `//` was accepted. It was not exploitable (the host stays `api.github.com`), but empty segments are now rejected as defence in depth. Found by a test.
+3. **Implicit defaults.** The add route relied on database server defaults for `ownership_status` and `collection_status`, so a non-flushed object failed response validation. Both are now set explicitly, which also documents that ownership starts `unverified`.
+4. **Deprecated constant.** Starlette `HTTP_422_UNPROCESSABLE_ENTITY` produced 6 test warnings; the code now uses `HTTP_422_UNPROCESSABLE_CONTENT`.
+5. **Test fake fidelity.** The fake GitHub matched paths case-sensitively, unlike the real API; fixed in the fake.
+6. **Weak privacy assertion.** The real-API test first asserted that no `@` appears, but octocat's public company is `@github`. It now checks for actual e-mail patterns.
+
+**Not done (by instruction):** LeetCode, Codeforces, HackerRank, multi-platform aggregation, scoring, reports, interview questions, authentication.
+
+---
+
 ## Phase 1B: Job Description Parsing Engine · 2026-11-12
 
 **Status:** Implemented and tested; **not complete.** The JD upload-to-database workflow works live (TXT, PDF, scanned PDF via OCR, DOCX) up to the LLM call. The real Groq structuring call has not run, because `GROQ_API_KEY` is still not configured. Phase 1A is blocked on the same step.

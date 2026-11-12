@@ -44,6 +44,9 @@ exports/
 # Synthetic, non-PII test fixtures only (added in later phases):
 !backend/tests/fixtures/**/*.pdf
 !backend/tests/fixtures/**/*.docx
+# Next.js route folders share these names but contain source code, not candidate data.
+!frontend/src/app/candidates/
+!frontend/src/app/resumes/
 
 # Database dumps / local DB files
 *.sql.gz

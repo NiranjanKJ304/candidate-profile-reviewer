@@ -7,10 +7,15 @@ The system will compare a candidate's resume and public developer-platform evide
 and produce an evidence-based evaluation report: supported claims, discrepancies,
 missing evidence, skill gaps and targeted interview questions.
 
-> **Current status: Phase 0 (foundation).** Only the project skeleton exists: configuration,
-> logging, health/readiness endpoints, database and cache wiring, a minimal frontend and
-> tests. **Docker is not used**: everything runs against natively installed services.
-> No resume parsing, platform collectors, LLM calls or scoring are implemented yet.
+> **Current status:**
+> - Phase 0 (foundation) is complete.
+> - Phases 1A (resume parsing) and 1B (JD parsing) are implemented but wait on a real Groq run.
+> - Phase 2 (GitHub developer profiles) is complete and verified against the real GitHub API.
+> - Phase 3 (Codeforces developer profiles) is complete and verified against the real Codeforces API.
+> - Phase 4 (LeetCode) is complete as a **manual, self-reported evidence** workflow. LeetCode has no permitted API, so it is never contacted.
+> - Other platforms, aggregation, scoring and reports are not started.
+>
+> **Docker is not used**: everything runs against natively installed services.
 > See [PROJECT_STATUS.md](PROJECT_STATUS.md) and [DEVELOPMENT_LOG.md](DEVELOPMENT_LOG.md).
 
 ## Repository layout
@@ -19,7 +24,7 @@ missing evidence, skill gaps and targeted interview questions.
 .
 ├── backend/              FastAPI service (Python 3.12, uv)
 │   ├── app/              application package (see ARCHITECTURE.md)
-│   ├── alembic/          database migrations (none yet)
+│   ├── alembic/          database migrations (0001-0005)
 │   └── tests/            unit/ and integration/ tests
 ├── frontend/             Next.js 16 + TypeScript + Tailwind CSS 4
 ├── scripts/              setup-local-db.ps1, integration-test.ps1
@@ -55,6 +60,36 @@ Original files are stored in `backend/storage/resumes/` (git-ignored). Endpoints
 3. Open http://localhost:3000/job-descriptions. You can upload PDF, DOCX or TXT, review required vs preferred skills, experience, education and responsibilities (each with its source quote), and **correct the extraction** before evaluation. The original extraction is kept, and you can restore it.
 
 Original JD files are stored in `backend/storage/job_descriptions/` (git-ignored). Endpoints: [API_DOCUMENTATION.md](API_DOCUMENTATION.md#job-descriptions).
+
+### GitHub developer profiles (Phase 2)
+
+1. In `backend/.env` set `ENABLED_PLATFORMS=github`. A `GITHUB_TOKEN` is optional and needs no scopes; it raises the limit from 60 to 5,000 requests/hour. Other `GITHUB_*` limits are in `backend/.env.example`.
+2. `cd backend; uv run alembic upgrade head` (migration `0004_developer_profile_sync`).
+3. Open http://localhost:3000/candidates, add or select a candidate, and connect a GitHub username or `https://github.com/{username}` URL. The same section appears under an uploaded resume.
+
+Only public data from the official REST API is collected: profile, repositories, languages and topics, README excerpts, a recent public-activity summary, and authored PR/issue counts. No e-mail addresses, commit messages or private repositories are stored. Each data category records its availability and source. Ownership is never assumed. Endpoints: [API_DOCUMENTATION.md](API_DOCUMENTATION.md#github-developer-profiles-phase-2).
+
+Real GitHub API tests (network, opt-in): `powershell -ExecutionPolicy Bypass -File scripts\integration-test.ps1 -GitHubLive`, or `INTEGRATION_GITHUB_LIVE=1 uv run pytest -m integration tests/integration/test_github_real_api.py`.
+
+### Codeforces developer profiles (Phase 3)
+
+1. In `backend/.env` add `codeforces` to `ENABLED_PLATFORMS` (e.g. `ENABLED_PLATFORMS=github,codeforces`). No API key is needed. Limits are `CODEFORCES_*` in `backend/.env.example`: the submission window defaults to 500 (maximum 1000), and requests are paced at 1 per 2 s or slower.
+2. No migration is needed (still `0004`).
+3. On http://localhost:3000/candidates (or under an uploaded resume), connect a Codeforces handle or `https://codeforces.com/profile/{handle}` URL.
+
+Only the official public API is used (`user.info`, `user.rating`, `user.status`). The section shows rating and rank, contest history, recent submissions, and statistics for solved unique problems, difficulty, topics, languages and verdicts. Lifetime values and collected-window values are labelled separately. No source code, e-mail or team-mate handles are stored. Endpoints: [API_DOCUMENTATION.md](API_DOCUMENTATION.md#codeforces-developer-profiles-phase-3).
+
+Real Codeforces API tests (network, opt-in): `powershell -ExecutionPolicy Bypass -File scripts\integration-test.ps1 -CodeforcesLive`, or `INTEGRATION_CODEFORCES_LIVE=1 uv run pytest -m integration tests/integration/test_codeforces_real_api.py`.
+
+### LeetCode: self-reported evidence (Phase 4)
+
+LeetCode publishes no official API, and its [Terms of Service](https://leetcode.com/terms/) forbid scraping (its [robots.txt](https://leetcode.com/robots.txt) also disallows `/graphql` and `/api/`). **This system therefore never contacts LeetCode.** Instead:
+
+1. Add `leetcode` to `ENABLED_PLATFORMS` (e.g. `ENABLED_PLATFORMS=github,codeforces,leetcode`) and run `uv run alembic upgrade head` (migration `0005_self_reported_evidence`).
+2. On http://localhost:3000/candidates, link a LeetCode username or `https://leetcode.com/u/{username}/` URL. It is stored, never fetched or checked.
+3. Use **Add self-reported evidence** to enter what the candidate reports: solved counts by difficulty, contest rating and history, languages, topics. Empty fields mean "not provided", never zero.
+
+Everything is labelled **self-reported and not verified** in the API, the database (stored apart from platform-collected evidence) and the UI. There is no sync. Endpoints: [API_DOCUMENTATION.md](API_DOCUMENTATION.md#leetcode-profiles-phase-4-manual-self-reported-evidence-only).
 
 ### Real-provider LLM tests
 
@@ -98,7 +133,7 @@ It is safe to re-run. Memurai needs no setup: by default it listens only on `127
 ```powershell
 cd backend
 uv sync                                  # creates backend/.venv with Python 3.12
-uv run alembic upgrade head              # creates the 5 domain tables (migration 0001)
+uv run alembic upgrade head              # applies migrations 0001-0005
 uv run uvicorn app.main:create_app --factory --reload --port 8000
 ```
 
@@ -115,7 +150,7 @@ fails immediately with a validation error.
 ```powershell
 cd backend
 uv run alembic upgrade head      # apply all migrations
-uv run alembic current           # show the applied revision (expect 0001_initial_schema)
+uv run alembic current           # show the applied revision (expect 0005_self_reported_evidence)
 uv run alembic check             # fails if the models and the database differ
 uv run alembic downgrade base    # drop everything (development only)
 uv run alembic upgrade head --sql   # print the SQL without a database
@@ -153,9 +188,10 @@ cd backend
 uv run ruff format --check .
 uv run ruff check .
 uv run mypy
-uv run pytest --cov                      # 484 unit tests (no services needed)
+uv run pytest --cov                      # 976 unit tests (no services or network needed)
 
-# Backend live tests: 72 tests (services, migrations, models, resume + JD workflows, real LLM if keyed).
+# Backend live tests: 113 tests (services, migrations, resume/JD/GitHub/Codeforces/LeetCode workflows;
+# real LLM/GitHub/Codeforces tests are opt-in: add -GitHubLive and/or -CodeforcesLive).
 # Reads backend/.env. Migrations run in a random temporary schema that is dropped afterwards,
 # so your existing tables are never touched.
 cd ..
