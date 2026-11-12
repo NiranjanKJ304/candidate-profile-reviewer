@@ -1,0 +1,150 @@
+# =============================================================================
+# OPTIONAL - NOT USED IN THE CURRENT WORKFLOW AND NOT VERIFIED.
+# Docker is not available on the development machine, so local development and
+# all tests run against natively installed services instead (PostgreSQL Windows
+# service on :5432, Memurai/Redis on :6379). See README.md. This file is kept only
+# as a starting point should containers be adopted later; it has never been built.
+# =============================================================================
+
+# Candidate Intelligence - local Docker stack.
+#
+#   Copy-Item .env.example .env     # then replace every change-me value
+#   docker compose up -d --build
+#   docker compose ps               # all services should become "healthy"
+#
+# Security defaults applied to every service:
+#   * host ports bound to 127.0.0.1 only (not exposed on the LAN)
+#   * no-new-privileges, all Linux capabilities dropped (only what each image's
+#     entrypoint strictly needs is added back)
+#   * read-only root filesystem with tmpfs for scratch paths
+#   * secrets come from the git-ignored .env file; compose refuses to start if missing
+
+name: candidate-intelligence
+
+x-hardening: &hardening
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  read_only: true
+  restart: unless-stopped
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+
+services:
+  postgres:
+    <<: *hardening
+    image: postgres:17-alpine
+    # The entrypoint fixes data-dir ownership and then drops to the postgres user.
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETGID, SETUID]
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-candidate_app}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-candidate_intel}
+      POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    tmpfs:
+      - /var/run/postgresql
+      - /tmp
+    ports:
+      - "127.0.0.1:${POSTGRES_HOST_PORT:-5433}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\" -h 127.0.0.1"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    shm_size: 128m
+
+  redis:
+    <<: *hardening
+    image: redis:7.4-alpine
+    # The entrypoint fixes /data ownership and then drops to the redis user.
+    cap_add: [CHOWN, SETGID, SETUID]
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}
+    command:
+      - sh
+      - -c
+      - exec docker-entrypoint.sh redis-server --requirepass "$$REDIS_PASSWORD" --appendonly yes --protected-mode yes
+    volumes:
+      - redis_data:/data
+    tmpfs:
+      - /tmp
+    ports:
+      - "127.0.0.1:${REDIS_HOST_PORT:-6379}:6379"
+    healthcheck:
+      # REDISCLI_AUTH keeps the password off the redis-cli command line.
+      test: ["CMD-SHELL", "REDISCLI_AUTH=\"$$REDIS_PASSWORD\" redis-cli ping | grep -q PONG"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
+  # One-shot job: applies Alembic migrations, then exits. The backend waits for it.
+  migrate:
+    <<: *hardening
+    image: candidate-intelligence/backend:dev
+    build:
+      context: ./backend
+    restart: "no"
+    command: ["alembic", "upgrade", "head"]
+    environment: &backend-env
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_JSON: "true"
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
+      ENABLED_PLATFORMS: ${ENABLED_PLATFORMS:-}
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-candidate_app}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-candidate_intel}
+      REDIS_URL: redis://:${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}@redis:6379/0
+    tmpfs:
+      - /tmp
+    healthcheck:
+      disable: true
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  backend:
+    <<: *hardening
+    image: candidate-intelligence/backend:dev
+    environment: *backend-env
+    tmpfs:
+      - /tmp
+    ports:
+      - "127.0.0.1:${BACKEND_HOST_PORT:-8000}:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    # Liveness healthcheck is defined in backend/Dockerfile.
+
+  frontend:
+    <<: *hardening
+    build:
+      context: ./frontend
+      args:
+        NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8000}
+    image: candidate-intelligence/frontend:dev
+    tmpfs:
+      - /tmp
+      - /app/.next/cache:uid=1000,gid=1000,mode=0755
+    ports:
+      - "127.0.0.1:${FRONTEND_HOST_PORT:-3000}:3000"
+    depends_on:
+      backend:
+        condition: service_healthy
+    # Healthcheck is defined in frontend/Dockerfile.
+
+volumes:
+  postgres_data:
+  redis_data:
