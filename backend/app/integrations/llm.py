@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -139,6 +140,8 @@ class ChatCompletionClient:
                 raise LLMAuthError(f"LLM provider rejected the API key (HTTP {status})")
             if status == 429:
                 raise LLMRateLimitError("LLM provider rate limit reached")
+            if status == 413:
+                raise LLMResponseError(_too_large_message(response))
             if status == 404:
                 raise LLMResponseError(
                     f"LLM provider returned HTTP 404: model '{self.model}' was not found or is "
@@ -159,6 +162,18 @@ class ChatCompletionClient:
                 },
             )
             return ChatResult(content=content, model=model, duration_ms=duration_ms)
+
+
+def _too_large_message(response: httpx.Response) -> str:
+    """HTTP 413: report the provider's limit and requested size (numbers only)."""
+    match = re.search(r"Limit (\d+), Requested (\d+)", response.text[:2000])
+    detail = (
+        f" (tokens per minute: limit {match.group(1)}, requested {match.group(2)})" if match else ""
+    )
+    return (
+        f"LLM provider returned HTTP 413: the request is too large for the provider's limit"
+        f"{detail}. Reduce the input or use a higher provider tier."
+    )
 
 
 def _retry_delay(response: httpx.Response, attempt: int) -> float:

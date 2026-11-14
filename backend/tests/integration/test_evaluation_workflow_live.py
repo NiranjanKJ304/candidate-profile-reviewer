@@ -351,3 +351,25 @@ async def test_unexpected_error_is_recorded_not_stuck(h: Harness) -> None:
     assert body["error_code"] == "internal_error"
     assert "RuntimeError" in body["error_message"]
     assert body["completed_at"] is not None
+
+
+async def test_trimmed_evidence_is_kept_and_marked_not_sent(h: Harness) -> None:
+    h.app.state.evaluation_processor = EvaluationProcessor(
+        session_factory=h.sessions,
+        assessor=EvaluationAssessor(h.llm, max_attempts=2, max_prompt_tokens=2500),
+    )
+    cid = await h.candidate()
+    await h.resume(cid)
+    await h.github(cid)
+    jid = await h.jd()
+    body = await h.get((await h.evaluate(cid, jid)).json()["id"])
+    assert body["status"] == "completed", body
+    evidence = body["result"]["evidence"]
+    not_sent = [e for e in evidence if not e["sent_to_llm"]]
+    assert not_sent  # stored for transparency, but not sent
+    sent_ids = {e["id"] for e in evidence if e["sent_to_llm"]}
+    cited = {i for r in body["result"]["requirements"] for i in r["evidence_ids"]}
+    assert cited <= sent_ids
+    assert any("request limit" in w for w in body["warnings"])
+    sent_chars = sum(len(m.content) for m in h.llm.calls[0])
+    assert sent_chars / 3.6 <= 2500

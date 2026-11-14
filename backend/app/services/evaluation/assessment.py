@@ -36,11 +36,14 @@ from app.schemas.evaluation import (
     SourceStatus,
 )
 from app.schemas.job_description_parsing import ParsedJobDescription
+from app.services.evaluation.budget import fit_to_budget
 from app.services.evaluation.scoring import WEIGHTS, credit_for, trust_factor
 from app.services.llm_json import SupportsCompleteJson, complete_validated, schema_json
 from app.services.resume.errors import ProcessingError
 
 PROMPT_VERSION = "eval-v2"
+# Prompt-token budget; fits Groq's free tier (8,000 tokens/minute incl. the answer).
+DEFAULT_MAX_PROMPT_TOKENS = 4500
 BEGIN = "<<<EVALUATION_DATA_BEGIN>>>"
 END = "<<<EVALUATION_DATA_END>>>"
 
@@ -93,6 +96,7 @@ class AssessmentOutcome:
     summary: str
     model: str
     warnings: list[str] = field(default_factory=list)
+    sent_evidence_ids: set[str] = field(default_factory=set)
 
 
 def build_payload(
@@ -102,12 +106,13 @@ def build_payload(
     sources: list[SourceStatus],
     experience: ExperienceEstimate,
 ) -> dict[str, object]:
+    sent = {e.id for e in evidence}
     return {
         "job": {
             "title": jd.job_title,
             "seniority": jd.seniority.level if jd.seniority else None,
-            "summary": jd.job_summary,
-            "responsibilities": [r.text for r in jd.responsibilities[:15]],
+            "summary": (jd.job_summary or "")[:400] or None,
+            "responsibilities": [r.text[:200] for r in jd.responsibilities[:8]],
         },
         "requirements": [
             {
@@ -116,7 +121,8 @@ def build_payload(
                 "type": r.type,
                 "text": r.text,
                 "baseline_status": r.baseline_status,
-                "baseline_evidence_ids": r.baseline_evidence_ids,
+                # Only ids that are actually sent, and at most five per requirement.
+                "baseline_evidence_ids": [i for i in r.baseline_evidence_ids if i in sent][:5],
             }
             for r in requirements
         ],
@@ -165,9 +171,16 @@ def _problems(result: LLMAssessment, req_ids: set[str], ev_ids: set[str]) -> tup
 
 
 class EvaluationAssessor:
-    def __init__(self, client: SupportsCompleteJson, *, max_attempts: int) -> None:
+    def __init__(
+        self,
+        client: SupportsCompleteJson,
+        *,
+        max_attempts: int,
+        max_prompt_tokens: int = DEFAULT_MAX_PROMPT_TOKENS,
+    ) -> None:
         self._client = client
         self._max_attempts = max_attempts
+        self._max_prompt_tokens = max_prompt_tokens
 
     @property
     def configured(self) -> bool:
@@ -203,19 +216,51 @@ class EvaluationAssessor:
                 EvaluationErrorCode.LLM_NOT_CONFIGURED,
                 "No LLM API key is configured (set GROQ_API_KEY in backend/.env)",
             )
-        messages = build_messages(build_payload(jd, requirements, evidence, sources, experience))
+        fitted = fit_to_budget(
+            lambda items: build_messages(
+                build_payload(jd, requirements, items, sources, experience)
+            ),
+            evidence,
+            requirements,
+            self._max_prompt_tokens,
+        )
+        if fitted is None:
+            raise EvaluationError(
+                EvaluationErrorCode.LLM_ERROR,
+                f"The evaluation is too large for the configured LLM request budget "
+                f"({self._max_prompt_tokens} prompt tokens) even after trimming the evidence: "
+                f"the job description has {len(requirements)} requirements. Reduce the "
+                "requirements (review the JD) or raise LLM_EVALUATION_MAX_PROMPT_TOKENS, which "
+                "needs a higher LLM provider tier.",
+            )
+        messages = fitted.messages
+        sent = fitted.evidence
         req_ids = {r.id for r in requirements}
-        ev_ids = {e.id for e in evidence}
+        ev_ids = {e.id for e in sent}
+        notes: list[str] = []
+        if fitted.omitted_ids or fitted.shortened:
+            notes.append(
+                "To stay within the LLM provider's request limit, "
+                + (
+                    f"{len(fitted.omitted_ids)} lower-priority evidence item(s) were not sent to "
+                    "the model (marked 'not sent'); "
+                    if fitted.omitted_ids
+                    else ""
+                )
+                + (f"{fitted.shortened} long text(s) were shortened" if fitted.shortened else "")
+            )
         result, model = await self._ask(messages)
         problems, severity = _problems(result, req_ids, ev_ids)
         if problems:
+            # The previous reply is not resent: that would double the request size and can
+            # exceed the provider's per-request token limit.
             retry = [
                 *messages,
-                ChatMessage("assistant", result.model_dump_json()[:20_000]),
                 ChatMessage(
                     "user",
-                    "Your reply had problems: " + "; ".join(problems) + ". Reply again with ONE "
-                    "verdict for EVERY requirement id and cite only evidence ids that exist.",
+                    "Your previous reply had problems: " + "; ".join(problems) + ". Reply again "
+                    "from scratch with ONE verdict for EVERY requirement id and cite only evidence "
+                    "ids that exist.",
                 ),
             ]
             retry_note: str | None = None
@@ -229,11 +274,14 @@ class EvaluationAssessor:
             else:
                 if _problems(second, req_ids, ev_ids)[1] <= severity:
                     result, model = second, model2
-            outcome = apply_guards(result, requirements, evidence, model)
+            outcome = apply_guards(result, requirements, sent, model)
             if retry_note:
                 outcome.warnings.insert(0, retry_note)
-            return outcome
-        return apply_guards(result, requirements, evidence, model)
+        else:
+            outcome = apply_guards(result, requirements, sent, model)
+        outcome.warnings[:0] = notes
+        outcome.sent_evidence_ids = ev_ids
+        return outcome
 
 
 class EvaluationError(Exception):

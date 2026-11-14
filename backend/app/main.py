@@ -116,7 +116,11 @@ def build_resume_pipeline(app: FastAPI, settings: Settings) -> None:
     # Candidate-JD evaluation (Phase 5): reuses the LLM client.
     app.state.evaluation_processor = EvaluationProcessor(
         session_factory=app.state.session_factory,
-        assessor=EvaluationAssessor(llm_client, max_attempts=settings.llm_max_attempts),
+        assessor=EvaluationAssessor(
+            llm_client,
+            max_attempts=settings.llm_max_attempts,
+            max_prompt_tokens=settings.llm_evaluation_max_prompt_tokens,
+        ),
     )
 
     # Job descriptions reuse OCR, the LLM client and the storage implementation.

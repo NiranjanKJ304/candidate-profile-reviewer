@@ -56,6 +56,7 @@ describe("EvaluationWorkspace", () => {
     expect(within(table).getByRole("link", { name: "G1" })).toHaveAttribute("href", "#evidence-G1");
     expect(within(view).getByText(/may contain mistakes; the requirement table below is authoritative/)).toBeInTheDocument();
     expect(within(view).getByText(/not evidence of missing skills/)).toBeInTheDocument();
+    expect(within(view).getByText("not sent to the model")).toBeInTheDocument(); // R9 only
     const posted = fetchFn.mock.calls.find((c) => ((c as unknown[])[1] as RequestInit | undefined)?.method === "POST");
     expect(JSON.parse(String(((posted as unknown[])[1] as RequestInit).body))).toEqual({
       candidate_id: CANDIDATE.id,

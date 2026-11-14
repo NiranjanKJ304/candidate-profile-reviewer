@@ -100,6 +100,9 @@ class Settings(BaseSettings):
     llm_timeout_seconds: float = Field(default=60.0, gt=0, le=300)
     llm_max_attempts: int = Field(default=2, ge=1, le=5)
     llm_max_input_chars: int = Field(default=60_000, ge=1_000, le=500_000)
+    # Candidate evaluation prompt budget (tokens). Groq's free tier allows 8,000 tokens per
+    # minute for openai/gpt-oss-120b including the answer; raise this on a paid tier.
+    llm_evaluation_max_prompt_tokens: int = Field(default=4500, ge=1000, le=200_000)
 
     # --- Resume upload & parsing --------------------------------------------------
     resume_storage_dir: Path = Path("storage/resumes")

@@ -1,5 +1,30 @@
 # Development Log
 
+## Maintenance: evaluation failed with HTTP 413 · 2026-11-14
+
+**Symptom (reported).** Evaluating a real candidate for "AI/ML Software Engineer" failed with `llm_error` / "LLM provider returned HTTP 413".
+
+**Diagnosis.**
+- I rebuilt the same prompt locally: 23 requirements and 61 evidence items, 23,489 characters, which Groq counted as about 6,500 prompt tokens.
+- Groq's own error: *"Request too large for model `openai/gpt-oss-120b` … tokens per minute (TPM): Limit 8000, Requested 9563"*. The free tier allows 8,000 tokens per minute, and a single request (prompt plus Groq's answer allowance) above that is refused before processing.
+- Not a parsing or data bug, but the project sent requests with no size control.
+
+**Fix.**
+- **Prompt budget** (`app/services/evaluation/budget.py`, setting `LLM_EVALUATION_MAX_PROMPT_TOKENS`, default 4,500):
+  - shorten long evidence texts;
+  - leave out the least relevant items first (achievements, summaries, activity, topics, unreferenced skills and repositories, languages, projects);
+  - always keep each requirement's best three baseline items (platform data first) plus work experience, education, certifications and competitive-programming summaries;
+  - never drop requirements;
+  - if even that does not fit, fail with an actionable message instead of sending a request that will be refused.
+- Items that were not sent stay in the result with `sent_to_llm: false`, cannot back a verdict, and are labelled "not sent to the model" in the UI, with a warning.
+- The JD context sent is capped (summary 400 characters; 8 responsibilities × 200).
+- **Corrective retry no longer resends the model's previous answer**, which could double the request size.
+- **Clear 413 message** from the LLM client: limit and requested numbers only, never the provider's organisation id or the key.
+
+**Result.** The same real evaluation went through on real Groq: 24 of 61 items sent, answered in 7.1 s, score 50, Moderate. This check was not saved; re-run it in the UI. Backend 1,206 passed (96%; budget module 100%); frontend 215 passed.
+
+---
+
 ## Phase 5: Candidate–JD Evaluation · 2026-11-14
 
 **Status:** ✅ Complete and verified, including real Groq evaluations and a full real end-to-end run (resume and JD parsed by Groq, GitHub collected, evaluated, cleaned up).

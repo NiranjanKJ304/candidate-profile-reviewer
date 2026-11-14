@@ -207,6 +207,11 @@ export default function EvaluationResultView({ result }: { result: EvaluationRes
               <span className="font-mono">{e.id}</span>
               <span className={`rounded border px-1 ${TRUST_TONE[e.trust]}`}>{TRUST_TEXT[e.trust]}</span>
               <span>{e.text}</span>
+              {!e.sent_to_llm && (
+                <span className="rounded bg-zinc-100 px-1 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400" title="Left out to fit the LLM request limit">
+                  not sent to the model
+                </span>
+              )}
               {e.source_url && (
                 <a href={e.source_url} target="_blank" rel="noopener noreferrer" className="underline">
                   source

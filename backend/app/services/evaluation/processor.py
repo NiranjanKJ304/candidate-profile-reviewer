@@ -230,6 +230,10 @@ class EvaluationProcessor:
             jd_data, matched, bundle.items, bundle.sources, bundle.experience
         )
         warnings.extend(outcome.warnings)
+        evidence = [
+            item.model_copy(update={"sent_to_llm": item.id in outcome.sent_evidence_ids})
+            for item in bundle.items
+        ]
         if resume_data is None:
             warnings.append(
                 "No parsed resume was used; the assessment relies on platform evidence only"
@@ -242,7 +246,7 @@ class EvaluationProcessor:
             job_title=jd_data.job_title or jd.title,
             resume_id=ev.resume_id if resume_data is not None else None,
             sources=bundle.sources,
-            evidence=bundle.items,
+            evidence=evidence,
             experience=bundle.experience,
             requirements=outcome.requirements,
             score=breakdown,

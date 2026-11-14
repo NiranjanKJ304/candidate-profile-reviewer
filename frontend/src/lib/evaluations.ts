@@ -24,6 +24,8 @@ export interface EvidenceItem {
   kind: string;
   text: string;
   source_url: string | null;
+  /** False when left out to fit the LLM request limit (it could not back a verdict). */
+  sent_to_llm: boolean;
 }
 export interface AssessedRequirement {
   id: string;
@@ -121,6 +123,7 @@ function result(v: unknown): EvaluationResult {
         kind: str(e.kind),
         text: str(e.text),
         source_url: optStr(e.source_url),
+        sent_to_llm: e.sent_to_llm === undefined ? true : bool(e.sent_to_llm),
       };
     }),
     experience: { years: optNum(exp.years), method: str(exp.method) },

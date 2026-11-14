@@ -756,7 +756,7 @@ Linked GitHub / Codeforces snapshots and LeetCode self-reported evidence are alw
 |---|---|
 | `jd_version` | `reviewed` (human-corrected) or `extracted` |
 | `sources[]` | Per source (`resume`, `github`, `codeforces`, `leetcode`): `used` / `not_linked` / `not_collected` / `unavailable`, with a note. Not linked is not evidence of missing skills |
-| `evidence[]` | `{id, source, trust, kind, text, skills, source_url}`. Ids: `R*` resume, `G*` GitHub, `C*` Codeforces, `L*` LeetCode. Trust: `platform_collected`, `resume_claim`, `self_reported`. `text` is identity-redacted; `source_url` is **not** sent to the LLM |
+| `evidence[]` | `{id, source, trust, kind, text, skills, source_url, sent_to_llm}`. `sent_to_llm: false` = left out to fit the LLM request limit (cannot back a verdict). Ids: `R*` resume, `G*` GitHub, `C*` Codeforces, `L*` LeetCode. Trust: `platform_collected`, `resume_claim`, `self_reported`. `text` is identity-redacted; `source_url` is **not** sent to the LLM |
 | `experience` | `{years, entries_used, entries_unparsed, method}`: non-overlapping work-experience months from resume dates (internships excluded); `years: null` = unknown |
 | `requirements[]` | `{id (Q*), kind (required/preferred), type (skill/experience/education/qualification), text, baseline_status, baseline_evidence_ids, verdict, evidence_ids, rationale, weight, credit, adjusted}` |
 | `score` | `{overall, fit_label, coverage, required_met, required_total, preferred_met, preferred_total, unmet_required[], unevidenced_required[], method}` |
@@ -789,6 +789,13 @@ Responsibilities are context only; soft skills are not scored.
 - `overall = 100 × credit / total weight`.
 - Coverage below 50% gives `overall: null`.
 - Labels: Strong ≥ 75, Moderate ≥ 50, otherwise Weak. Capped at Moderate when a required item is not met.
+
+**Request size:** the prompt is fitted to `LLM_EVALUATION_MAX_PROMPT_TOKENS` (default 4,500;
+Groq's free tier allows 8,000 tokens per minute including the answer). Long evidence texts
+are shortened, and the least relevant items are left out first; requirements and each
+requirement's best three evidence items are kept. If even that does not fit, the evaluation
+fails with `llm_error` and an explanation, and no request is sent. A provider HTTP 413 is reported
+with its limit and requested token numbers.
 
 ### `GET /api/v1/evaluations?candidate_id=&job_description_id=&limit=50&offset=0`
 

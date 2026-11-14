@@ -5,6 +5,20 @@ not run is marked **NOT RUN** with the reason.
 
 ---
 
+## Maintenance: HTTP 413 fix (2026-11-14)
+
+| Check | Result |
+|---|---|
+| Reproduce: the user's failed evaluation, prompt rebuilt locally | 23 requirements, 61 evidence items, 23,489 characters (~6,500 tokens) |
+| Groq response for that request | 413 "TPM: Limit 8000, Requested 9563" (refused before processing) |
+| **Same evaluation with the budget, real Groq (not saved)** | ✅ fits; 24 of 61 items sent; answered in 7.1 s; score 50, Moderate |
+| New unit tests `test_evaluation_budget.py` | ✅ 10: untouched when small; low-priority dropped first; essentials kept; text shortening; impossible budget → no request; only the best 3 references per requirement are essential; omitted evidence cannot back a verdict; corrective retry does not resend the previous reply; 413 message has numbers but no account id or key |
+| New live test | ✅ trimmed evidence stored with `sent_to_llm: false`; cited ids only from sent items; warning recorded |
+| Backend combined | ✅ **1,206 passed**, 7 skipped (opt-in), 96%; ruff and mypy clean |
+| Frontend | ✅ 215 passed ("not sent to the model" label); lint, typecheck and build clean |
+
+---
+
 ## Phase 5: Candidate–JD Evaluation (2026-11-14)
 
 ### Summary

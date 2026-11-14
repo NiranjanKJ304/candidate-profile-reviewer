@@ -52,6 +52,10 @@ class EvidenceItem(BaseModel):
     text: str = Field(max_length=800, description="Identity-redacted description")
     skills: list[str] = Field(default_factory=list, description="Normalised skill keys")
     source_url: str | None = None
+    sent_to_llm: bool = Field(
+        default=True,
+        description="False when left out to fit the LLM request limit (cannot back a verdict)",
+    )
 
 
 class SourceStatus(BaseModel):

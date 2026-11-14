@@ -12,6 +12,8 @@ describe("parseEvaluation", () => {
     expect(e?.result?.score.unevidenced_required).toEqual(["Q2"]);
     expect(e?.result?.requirements[1].verdict).toBe("insufficient_evidence");
     expect(e?.result?.evidence[1].trust).toBe("platform_collected");
+    expect(e?.result?.evidence[0].sent_to_llm).toBe(true); // missing in older results -> true
+    expect(e?.result?.evidence[2].sent_to_llm).toBe(false);
   });
 
   it("keeps a missing score as null, never zero", () => {

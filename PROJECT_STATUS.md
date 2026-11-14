@@ -121,7 +121,7 @@ Details: [TEST_REPORT.md](TEST_REPORT.md).
 |---|---|---|---|
 | 1 | **`ENABLED_PLATFORMS` is empty in your `backend/.env`** | Platform features are disabled in normal runs (evaluations still work with resumes) | Set `ENABLED_PLATFORMS=github,codeforces,leetcode` |
 | 2 | **`frontend/src/app/resumes/page.tsx` is missing from the pushed commit** (`.gitignore` fixed in Phase 3) | A fresh clone has no `/resumes` page | Include it and `/candidates` in the next commit |
-| 3 | **Groq free-tier rate limit** | One evaluation is about 3–10k tokens; several in a minute → `llm_rate_limited` | Wait a minute and **Re-run**, or use a paid tier |
+| 3 | **Groq free tier: 8,000 tokens per minute** | Large evaluations previously failed with HTTP 413 (fixed: the prompt is fitted to `LLM_EVALUATION_MAX_PROMPT_TOKENS`=4,500 and less relevant evidence is marked "not sent"); several evaluations in one minute → `llm_rate_limited` | Wait a minute and **Re-run**; on a paid tier raise the budget for fuller prompts |
 | 4 | LLM verdicts and summary can still be imperfect | They support a decision, not make it | Verdicts cite evidence; guards fix unsupported verdicts; the summary is labelled as model-written |
 | 5 | Experience is estimated from free-text resume dates | Unparseable dates mean "unknown" | Reported per evaluation |
 | 6 | No resume picker in the UI (API accepts `resume_id`) | Uses the latest parsed resume | Later UI improvement |
