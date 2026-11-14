@@ -116,6 +116,17 @@ async def test_transient_5xx_is_retried_once_then_succeeds() -> None:
     assert result.content == '{"a": 1}'
 
 
+async def test_unknown_model_names_the_model_and_the_fix() -> None:
+    body = {"error": {"code": "model_not_found", "message": "The model does not exist"}}
+    with pytest.raises(LLMResponseError) as info:
+        await _client(lambda r: httpx.Response(404, json=body)).complete_json(MESSAGES)
+    message = str(info.value)
+    assert "HTTP 404" in message
+    assert "'test-model'" in message
+    assert "LLM_MODEL" in message
+    assert KEY not in message
+
+
 async def test_persistent_5xx() -> None:
     with pytest.raises(LLMResponseError, match="HTTP 500"):
         await _client(lambda r: httpx.Response(500, headers={"retry-after": "0"})).complete_json(
@@ -168,7 +179,7 @@ class TestFromSettings:
         client = ChatCompletionClient.from_settings(s, httpx.AsyncClient())
         assert client.configured
         assert client.base_url == "https://api.groq.com/openai/v1"
-        assert client.model == "llama-3.3-70b-versatile"
+        assert client.model == "openai/gpt-oss-120b"
 
     def test_openrouter_selected(self, make_settings: SettingsFactory) -> None:
         s = make_settings(llm_provider="openrouter", openrouter_api_key="sk-or-x", llm_model="m/x")

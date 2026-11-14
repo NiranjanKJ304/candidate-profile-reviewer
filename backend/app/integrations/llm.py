@@ -139,6 +139,12 @@ class ChatCompletionClient:
                 raise LLMAuthError(f"LLM provider rejected the API key (HTTP {status})")
             if status == 429:
                 raise LLMRateLimitError("LLM provider rate limit reached")
+            if status == 404:
+                raise LLMResponseError(
+                    f"LLM provider returned HTTP 404: model '{self.model}' was not found or is "
+                    "not available to this API key. Set LLM_MODEL in backend/.env to a model "
+                    "your provider offers."
+                )
             if status >= 400:
                 raise LLMResponseError(f"LLM provider returned HTTP {status}")
 

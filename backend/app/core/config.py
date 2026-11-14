@@ -30,8 +30,10 @@ LLM_DEFAULT_BASE_URLS: dict[str, str] = {
     "openrouter": "https://openrouter.ai/api/v1",
 }
 # Defaults only; override with LLM_MODEL when a provider retires a model.
+# Groq retired llama-3.3-70b-versatile for this account (HTTP 404 model_not_found,
+# checked 2026-11-14); openai/gpt-oss-120b was verified to work in JSON mode.
 LLM_DEFAULT_MODELS: dict[str, str] = {
-    "groq": "llama-3.3-70b-versatile",
+    "groq": "openai/gpt-oss-120b",
     "openrouter": "meta-llama/llama-3.3-70b-instruct",
 }
 

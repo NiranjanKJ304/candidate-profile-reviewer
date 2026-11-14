@@ -1,0 +1,115 @@
+/** Synthetic evaluation payloads for frontend tests. */
+
+export const CANDIDATE = { id: "c0000000-0000-4000-8000-0000000000e1", full_name: "Jordan Sample", email: null };
+export const JD = {
+  id: "d0000000-0000-4000-8000-0000000000e1",
+  title: "Senior Backend Engineer",
+  company: "Example Corp",
+  original_filename: "jd.pdf",
+  file_size_bytes: 1000,
+  parse_status: "completed",
+  parse_error_code: null,
+  extraction_method: "pdf_text",
+  has_review: true,
+  created_at: "2026-11-14T10:00:00Z",
+};
+export const EID = "e0000000-0000-4000-8000-0000000000e1";
+const T = "2026-11-14T10:00:00Z";
+
+export const RESULT = {
+  schema_version: 1,
+  prompt_version: "eval-v2",
+  jd_version: "reviewed",
+  job_title: "Senior Backend Engineer",
+  resume_id: null,
+  sources: [
+    { source: "resume", status: "used", note: null, collected_at: null },
+    { source: "github", status: "used", note: null, collected_at: T },
+    { source: "codeforces", status: "not_linked", note: "No profile linked", collected_at: null },
+    { source: "leetcode", status: "not_linked", note: "No profile linked", collected_at: null },
+  ],
+  evidence: [
+    { id: "R1", source: "resume", trust: "resume_claim", kind: "skill", text: "Lists skill: Python", skills: ["python"], source_url: null },
+    {
+      id: "G1",
+      source: "github",
+      trust: "platform_collected",
+      kind: "repository",
+      text: "GitHub repository 'data-api'",
+      skills: ["python"],
+      source_url: "https://github.com/octo-dev/data-api",
+    },
+  ],
+  experience: { years: 7.4, entries_used: 2, entries_unparsed: 0, method: "estimate" },
+  requirements: [
+    {
+      id: "Q1",
+      kind: "required",
+      type: "skill",
+      text: "Python",
+      skill_key: "python",
+      baseline_status: "platform_evidence",
+      baseline_evidence_ids: ["R1", "G1"],
+      verdict: "met",
+      evidence_ids: ["R1", "G1"],
+      rationale: "Resume and GitHub show Python.",
+      weight: 2,
+      credit: 2,
+      adjusted: null,
+    },
+    {
+      id: "Q2",
+      kind: "required",
+      type: "skill",
+      text: "Rust",
+      skill_key: "rust",
+      baseline_status: "no_evidence",
+      baseline_evidence_ids: [],
+      verdict: "insufficient_evidence",
+      evidence_ids: [],
+      rationale: "No Rust evidence.",
+      weight: 2,
+      credit: 0,
+      adjusted: "Changed from 'not_met': no evidence was cited",
+    },
+  ],
+  score: {
+    overall: 80.8,
+    fit_label: "strong",
+    coverage: 0.846,
+    required_met: 1,
+    required_total: 2,
+    preferred_met: 0,
+    preferred_total: 0,
+    unmet_required: [],
+    unevidenced_required: ["Q2"],
+    method: "weights required=2, preferred=1",
+  },
+  strengths: [{ text: "Solid Python work", evidence_ids: ["G1"] }],
+  gaps: [{ text: "No Rust evidence", requirement_ids: ["Q2"] }],
+  discrepancies: [],
+  summary: "Strong backend profile; Rust is not evidenced.",
+  privacy: { identity_removed: true, source_urls_sent_to_llm: false },
+  decision_support_notice: "Decision support only: this is not a hiring decision.",
+};
+
+export function evaluation(overrides: Record<string, unknown> = {}) {
+  return {
+    id: EID,
+    candidate_id: CANDIDATE.id,
+    job_description_id: JD.id,
+    resume_id: null,
+    status: "completed",
+    overall_score: 80.8,
+    fit_label: "strong",
+    job_title: "Senior Backend Engineer",
+    model_name: "openai/gpt-oss-120b",
+    error_code: null,
+    error_message: null,
+    created_at: T,
+    completed_at: T,
+    warnings: [],
+    result: RESULT,
+    ...overrides,
+  };
+}

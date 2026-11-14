@@ -229,7 +229,7 @@ class TestCapabilities:
         assert body["llm"] == {
             "configured": False,
             "provider": "groq",
-            "model": "llama-3.3-70b-versatile",
+            "model": "openai/gpt-oss-120b",
         }
         assert body["resume"]["accepted_extensions"] == [".pdf", ".docx"]
         assert body["resume"]["max_bytes"] == 10 * 1024 * 1024

@@ -33,6 +33,8 @@ from app.integrations.llm import ChatCompletionClient
 from app.services.codeforces.collector import CodeforcesCollector
 from app.services.codeforces.collector import CollectorLimits as CodeforcesLimits
 from app.services.codeforces.sync import CodeforcesSyncService
+from app.services.evaluation.assessment import EvaluationAssessor
+from app.services.evaluation.processor import EvaluationProcessor
 from app.services.github.collector import CollectorLimits, GitHubCollector
 from app.services.github.sync import GitHubSyncService
 from app.services.job_description.processor import JobDescriptionProcessor
@@ -109,6 +111,12 @@ def build_resume_pipeline(app: FastAPI, settings: Settings) -> None:
             CodeforcesLimits(submission_limit=settings.codeforces_submission_limit),
         ),
         enabled=lambda: settings.codeforces_enabled,
+    )
+
+    # Candidate-JD evaluation (Phase 5): reuses the LLM client.
+    app.state.evaluation_processor = EvaluationProcessor(
+        session_factory=app.state.session_factory,
+        assessor=EvaluationAssessor(llm_client, max_attempts=settings.llm_max_attempts),
     )
 
     # Job descriptions reuse OCR, the LLM client and the storage implementation.

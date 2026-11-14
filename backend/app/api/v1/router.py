@@ -5,6 +5,7 @@ from fastapi import APIRouter
 from app.api.v1 import (
     candidates,
     codeforces,
+    evaluations,
     github,
     health,
     job_descriptions,
@@ -22,3 +23,4 @@ api_router.include_router(job_descriptions.router)
 api_router.include_router(github.router)
 api_router.include_router(codeforces.router)
 api_router.include_router(leetcode.router)
+api_router.include_router(evaluations.router)

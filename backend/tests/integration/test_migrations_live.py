@@ -34,7 +34,7 @@ async def test_upgrade_creates_tables_and_records_revision(migrated_engine: Asyn
         tables = await conn.run_sync(_tables)
         version = (await conn.execute(text("SELECT version_num FROM alembic_version"))).scalar_one()
     assert tables >= DOMAIN_TABLES
-    assert version == "0005_self_reported_evidence"
+    assert version == "0006_evaluation_errors"
 
 
 async def test_migration_matches_models_exactly(migrated_engine: AsyncEngine) -> None:
@@ -74,7 +74,7 @@ async def test_self_reported_migration_round_trip_with_data(migrated_engine: Asy
             ),
             {"cid": cid},
         )
-        await conn.run_sync(run_alembic, "downgrade", "0004_developer_profile_sync")
+        await conn.run_sync(run_alembic, "downgrade", "0004_developer_profile_sync")  # via 0006
         row = (await conn.execute(text("SELECT sync_status FROM developer_profiles"))).one()
         assert row.sync_status == "pending"
         cols = {

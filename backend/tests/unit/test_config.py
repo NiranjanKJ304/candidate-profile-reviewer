@@ -198,7 +198,7 @@ class TestLLMAndResumeSettings:
         assert s.llm_resolved_base_url == "https://proxy.example.com/v1"
 
     def test_blank_model_falls_back_to_default(self, make_settings: SettingsFactory) -> None:
-        assert make_settings(llm_model="  ").llm_resolved_model == "llama-3.3-70b-versatile"
+        assert make_settings(llm_model="  ").llm_resolved_model == "openai/gpt-oss-120b"
 
     @pytest.mark.parametrize(
         ("field", "value"),

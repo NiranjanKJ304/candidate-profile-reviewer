@@ -33,20 +33,22 @@ def _sql(revision: str, downgrade: bool = False) -> str:
 
 def test_single_linear_head() -> None:
     script = ScriptDirectory.from_config(_config())
-    assert script.get_heads() == ["0005_self_reported_evidence"]
+    assert script.get_heads() == ["0006_evaluation_errors"]
     revisions = list(script.walk_revisions())
     assert [r.revision for r in revisions] == [
+        "0006_evaluation_errors",
         "0005_self_reported_evidence",
         "0004_developer_profile_sync",
         "0003_job_description_parsing",
         "0002_resume_parsing",
         "0001_initial_schema",
     ]
-    assert revisions[0].down_revision == "0004_developer_profile_sync"
-    assert revisions[1].down_revision == "0003_job_description_parsing"
-    assert revisions[2].down_revision == "0002_resume_parsing"
-    assert revisions[3].down_revision == "0001_initial_schema"
-    assert revisions[4].down_revision is None
+    assert revisions[0].down_revision == "0005_self_reported_evidence"
+    assert revisions[1].down_revision == "0004_developer_profile_sync"
+    assert revisions[2].down_revision == "0003_job_description_parsing"
+    assert revisions[3].down_revision == "0002_resume_parsing"
+    assert revisions[4].down_revision == "0001_initial_schema"
+    assert revisions[5].down_revision is None
 
 
 @pytest.fixture(scope="module")
@@ -140,6 +142,16 @@ def test_developer_profile_sync_migration_sql() -> None:
     assert "CREATE INDEX ix_developer_profiles_platform_external_id" in sql
     down = _sql("0004_developer_profile_sync:0003_job_description_parsing", downgrade=True)
     assert "ALTER TABLE developer_profiles DROP COLUMN sync_status" in down
+
+
+def test_evaluation_errors_migration_sql() -> None:
+    sql = _sql("0005_self_reported_evidence:0006_evaluation_errors")
+    assert "ALTER TABLE evaluations ADD COLUMN error_code VARCHAR(40)" in sql
+    assert "ALTER TABLE evaluations ADD COLUMN warnings JSONB" in sql
+    assert "ADD CONSTRAINT ck_evaluations_error_code CHECK" in sql
+    assert "'jd_not_parsed'" in sql
+    down = _sql("0006_evaluation_errors:0005_self_reported_evidence", downgrade=True)
+    assert "ALTER TABLE evaluations DROP COLUMN error_code" in down
 
 
 def test_self_reported_evidence_migration_sql() -> None:

@@ -232,7 +232,8 @@ Each phase is built and tested on its own. Later phases are not started without 
 | 2 | GitHub developer-profile integration (REST, evidence with provenance, sync, UI) | **Complete and verified** (incl. real GitHub API) |
 | 3 | Codeforces developer-profile integration (official public API, analytics, provenance, sync, UI) | **Complete and verified** (incl. real Codeforces API) |
 | 4 | LeetCode feasibility: no permitted API exists, so a manual self-reported evidence workflow is used (never contacts LeetCode) | **Complete and verified** (manual mode; no real LeetCode API test, by design) |
-| 5+ | Other platforms (one per phase), aggregation, matching, LLM evaluation, reporting, interview questions | Not started; scope agreed per phase |
+| 5 | Candidate–JD evaluation: evidence bundle, deterministic matching, LLM verdicts with guards, backend score, `/evaluations` UI | **Complete and verified** (real Groq + real end-to-end) |
+| 6+ | Interview questions, recruiter reports, other platforms, authentication | Not started; scope agreed per phase |
 
 ### GitHub integration (Phase 2)
 
@@ -295,6 +296,32 @@ PUT  /candidates/{id}/leetcode/evidence -> LeetCodeEvidenceInput (strict, cross-
 - **Structural separation (migration 0005):** self-reported evidence has its own columns, so aggregation in later phases cannot confuse it with platform-collected evidence. The stored schema accepts only `self_reported` / `not_verified`, and the frontend parser rejects anything else.
 - **No network path:** LeetCode modules import no HTTP client, and tests enforce this plus the absence of any LeetCode endpoint, cookie or session string. API and live tests fail on any outbound request.
 - **No sync or retry endpoints**, because no permitted source exists. Freshness comes from the "as of" date (stale after 30 days, configurable).
+
+### Candidate–JD evaluation (Phase 5)
+
+```
+POST /evaluations {candidate, jd, resume?} -> evaluations row (pending) -> 202
+   -> background EvaluationProcessor.process()
+        load: reviewed-or-extracted ParsedJobDescription, ParsedResume, GitHub/Codeforces snapshots,
+              LeetCode self-reported evidence (source status: used / not_linked / not_collected)
+        evidence.build_bundle()   deterministic; ids R*/G*/C*/L*; trust platform_collected /
+                                  resume_claim / self_reported; identity redacted (name parts,
+                                  usernames, e-mail, phone, URLs); bias-prone fields omitted
+        experience.estimate()     non-overlapping months from free-text dates; unknown = null
+        matching.build_requirements() + match()   skills (aliases), experience, education,
+                                  qualifications (duplicates of other requirements dropped);
+                                  baseline evidence per skill by trust
+        assessment (LLM, eval-v2) strict LLMAssessment schema, corrective retry, guards:
+                                  no met/not_met without valid evidence, unknown ids removed,
+                                  not_met vs platform evidence flagged
+        scoring.score()           backend-computed; null below 50% coverage; label capped
+        -> result JSONB, overall_score, model_name, warnings, error_code
+```
+
+- **The LLM never produces the number**, and its verdicts cannot stand without evidence that exists.
+- **Insufficient evidence is not failure**: unproven required items are listed separately (`unevidenced_required`).
+- **Privacy and fairness**: the LLM receives only redacted evidence text (no URLs). The prompt forbids considering personal attributes; untrusted-data delimiters are neutralised.
+- Migration `0006` adds `evaluations.error_code` and `warnings`. JDs referenced by evaluations cannot be deleted; deleting a candidate deletes their evaluations.
 
 ### Resume pipeline (Phase 1A)
 

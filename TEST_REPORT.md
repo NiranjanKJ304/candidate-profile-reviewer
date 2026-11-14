@@ -5,6 +5,87 @@ not run is marked **NOT RUN** with the reason.
 
 ---
 
+## Phase 5: Candidate–JD Evaluation (2026-11-14)
+
+### Summary
+
+| Check | Command | Result |
+|---|---|---|
+| Backend format / lint | `uv run ruff format --check .` / `uv run ruff check .` | ✅ 145 files / all checks passed |
+| Backend types | `uv run mypy` (strict) | ✅ 0 issues in 144 source files |
+| Backend unit | `uv run pytest -q` | ✅ **1,073 passed** |
+| Backend combined (unit + live PostgreSQL) | `INTEGRATION_DATABASE_URL=… uv run pytest -m "" --cov` | ✅ **1,195 passed, 7 skipped** (opt-in real GitHub ×2, Codeforces ×2, Groq ×3), **96%** |
+| **Real Groq** | `INTEGRATION_GROQ_API_KEY=… uv run pytest -m integration tests/integration/test_llm_provider_live.py` | ✅ resume, JD and **evaluation**: 3/3 (evaluation re-run after the prompt change to `eval-v2`: passed) |
+| Migration on your DB | `uv run alembic upgrade head` / `current` / `check` | ✅ `0005 → 0006_evaluation_errors (head)`; no drift |
+| Frontend lint / typecheck | `npm run lint` / `npm run typecheck` | ✅ |
+| Frontend tests | `npm test` | ✅ **215 passed** (18 files) |
+| Frontend build | `npm run build` | ✅ `/`, `/candidates`, `/evaluations`, `/job-descriptions`, `/resumes` |
+| Earlier phases | (included above) | ✅ no regressions |
+
+### Coverage of the evaluation modules (combined run)
+
+| Module | Coverage |
+|---|---|
+| `api/v1/evaluations.py`, `schemas/evaluation.py`, `redact.py`, `scoring.py` | 100% |
+| `assessment.py` | 99% |
+| `experience.py` | 95% |
+| `processor.py` | 93% |
+| `evidence.py`, `matching.py`, `skills.py` | 91% |
+
+### New tests
+
+| File | Tests | Covers |
+|---|---|---|
+| `test_evaluation_building.py` | 50 | redaction (name parts, usernames, e-mail, phone, URLs; dates and numbers kept; short names not over-redacted); skill keys, platform language keys, whole-word mentions, tags; month parsing and **overlap-merged experience**, unknown → null; **bundle trust levels per source, unique ids, no identity or bias-prone fields (institution, grade, location, followers, company, usernames)**, resume-only, empty, forks excluded with source URLs kept; requirements from the JD (alias duplicate dropped, soft skills not scored, mandatory education), **duplicate qualifications not counted twice**, cap; baseline by trust (platform / resume / self-reported / none); **scoring** (weights, cap at Moderate, **null below 50% coverage**, unevidenced and unmet lists, weak, empty) |
+| `test_evaluation_assessment.py` | 19 | **prompt contains no identity, links, institution or grades**; evidence sent without URLs; system-prompt rules (fairness, untrusted data, summary consistency); delimiter spoofing neutralised; **guards** (valid kept; met without valid evidence → insufficient; not met without evidence → insufficient; not met despite platform evidence → review warning; self-reported only ×0.75; duplicates, unknown and missing verdicts; strengths/gaps cleaned); **corrective retry** (accepted when better; ignored when worse; first reply kept when the retry is invalid); invalid schema → `llm_invalid_response`; provider errors mapped (auth, timeout, rate limit); not configured → no call |
+| `test_evaluation_api.py` | 26 | create (defaults to latest parsed resume, none, explicit); bad resume (missing, other candidate, unparsed); JD not parsed (processing, empty, unreadable); unknown candidate/JD; LLM not configured; in progress (and stale run not blocking); schema; unreadable stored result; list; rerun (reset error, resolves missing resume, busy, unconfigured); delete and 404s; DB down on 5 endpoints; reviewed JD precedence and fallback |
+| `test_config.py` / `test_llm_client.py` | (existing, updated) | new default model |
+| `test_migrations_offline.py` | +1 | 0006 SQL up/down; 6-revision chain |
+| `test_evaluation_workflow_live.py` | 15 | PostgreSQL: **full evaluation** (resume + GitHub; Python met via platform evidence; Rust insufficient, not "not met"; score persisted as numeric); **the LLM never receives identity**; reviewed JD used; platform-only; no evidence → `no_evidence` without an LLM call; JD without requirements; **LLM timeout recorded, re-run succeeds**; unparsed JD/resume rejected; list filters; **JD delete blocked (409), candidate delete cascades**; error-code CHECK constraint; logs free of identity; **all four sources with trust levels (Rust met only via LeetCode → credit ×0.75; Codeforces and LeetCode usernames not sent)**; linked-but-not-collected sources and unusable resume; unexpected error → `internal_error`, not stuck |
+| `test_migrations_live.py` | (updated) | head 0006; 0005 round trip still works through 0006 |
+| `test_llm_provider_live.py` | +1 | **real Groq evaluation**: every requirement has a verdict; Python met or partial; Rust not met-as-met; cited ids valid |
+| `frontend/src/lib/evaluations.test.ts` | 9 | parsers (completed; null score stays null; pending/failed; rejects unknown verdict, trust, string score, status), page, create call body |
+| `frontend/.../EvaluationWorkspace.test.tsx` | 5 | evaluate → poll → score, label, notice, **unproven required list**, verdict table, adjusted note, evidence links, summary disclaimer, sources note; only parsed JDs offered; no-number state; failure explanation and re-run from history; selection validation and server error; config error |
+
+### Real Groq checks
+
+**Synthetic bundle** (resume + GitHub, model `openai/gpt-oss-120b`): Python met (cites G3, G7), PostgreSQL met, **Rust insufficient evidence**, Kubernetes partially met (resume claim only), experience met (7.4-year estimate), education met, REST APIs met. Score 80.8, Strong, coverage 0.846.
+
+**Real end-to-end** through the running backend:
+
+| Step | Result |
+|---|---|
+| Resume PDF → real Groq parse | completed, 3.1 s |
+| JD → real Groq parse | completed, 4.6 s |
+| GitHub `octocat` (real) | collected |
+| Evaluation | **completed, 6.1 s**, score 95.7, Strong; Kubernetes insufficient; `overall_score` a number |
+| Identity in evidence sent to the LLM | none (0 e-mails) |
+| Backend log | 67 lines, 0 e-mails, no name, 0 errors |
+| JD delete while evaluated | 409 |
+| Cleanup | all records and files removed |
+
+One run hit Groq's free-tier per-minute token limit (HTTP 429). It was correctly reported as `llm_rate_limited`, and the call succeeded about a minute later.
+
+### Coverage gaps (honest)
+
+- `evidence.py`: some optional-field branches (e.g. GitHub activity or PR totals missing, Codeforces unrated with no rated contests).
+- `processor.py`: "selected resume belongs to another candidate" (prevented by the API) and the SQLAlchemy re-raise.
+
+---
+
+## Maintenance: Groq model fix (2026-11-14)
+
+| Check | Result |
+|---|---|
+| `GET {groq}/models` with the configured key | 200; `llama-3.3-70b-versatile` **not listed** |
+| Chat completion with `llama-3.3-70b-versatile` | 404 `model_not_found` (reproduces the reported error) |
+| JSON-mode extraction with `openai/gpt-oss-120b`, `openai/gpt-oss-20b`, `qwen/qwen3.8-27b` | 200, valid JSON for all three |
+| **Real-provider tests** `INTEGRATION_GROQ_API_KEY=… uv run pytest -m integration tests/integration/test_llm_provider_live.py` | ✅ **2 passed** (`test_real_resume_structuring`, `test_real_jd_structuring`), real Groq, `openai/gpt-oss-120b` |
+| Backend unit (incl. new 404-message test) | ✅ 977 passed |
+| ruff / mypy strict | ✅ clean / 0 issues |
+
+---
+
 ## Phase 4: LeetCode Feasibility and Safe Implementation (2026-11-13)
 
 **Integration type tested: manual, self-reported evidence.** No LeetCode API is used, so **no real LeetCode API test exists or is claimed.** The "real" checks below exercise the running backend and your PostgreSQL only.

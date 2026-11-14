@@ -1,7 +1,8 @@
 """Evaluation: one assessment of a candidate against a job description.
 
-The scoring workflow arrives in a later phase; Phase 0 defines the record and its
-provenance fields (which resume and which model produced the result).
+Phase 0 defined the record; Phase 5 fills it (``app.services.evaluation``). The
+``result`` document holds the evidence used, per-requirement verdicts with cited
+evidence, the score breakdown and warnings.
 """
 
 from __future__ import annotations
@@ -14,7 +15,7 @@ from typing import TYPE_CHECKING, Any
 from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Numeric, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.core.enums import EvaluationStatus
+from app.core.enums import EvaluationErrorCode, EvaluationStatus
 from app.db.base import Base, JsonDocument, TimestampMixin, UUIDPrimaryKeyMixin, string_enum
 
 if TYPE_CHECKING:
@@ -55,6 +56,11 @@ class Evaluation(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     model_name: Mapped[str | None] = mapped_column(String(100))
     error_message: Mapped[str | None] = mapped_column(Text)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # --- Phase 5 (migration 0006) ---------------------------------------------------
+    error_code: Mapped[EvaluationErrorCode | None] = mapped_column(
+        string_enum(EvaluationErrorCode, "error_code", length=40)
+    )
+    warnings: Mapped[list[str] | None] = mapped_column(JsonDocument)
 
     candidate: Mapped[Candidate] = relationship(back_populates="evaluations")
     job_description: Mapped[JobDescription] = relationship(back_populates="evaluations")

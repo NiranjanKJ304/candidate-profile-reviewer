@@ -1,5 +1,60 @@
 # Development Log
 
+## Phase 5: Candidate–JD Evaluation · 2026-11-14
+
+**Status:** ✅ Complete and verified, including real Groq evaluations and a full real end-to-end run (resume and JD parsed by Groq, GitHub collected, evaluated, cleaned up).
+
+**Your request.** "Where can I see whether the candidate is suitable for the job? Pass the data to the LLM to validate the candidate against the JD." Decisions you confirmed: a score plus per-requirement verdicts; identity removed before the LLM; evaluation only (interview questions and reports later).
+
+**Inspected first.** The `evaluations` table from Phase 0 already existed (status, `overall_score` nullable, `result` JSONB, `model_name`, `completed_at`, JD `ON DELETE RESTRICT`). Phase 5 reuses the LLM client and the JSON-validation loop from Phases 1A/1B, and the background-task pattern.
+
+**Migration `0006_evaluation_errors`** (small, necessary): `evaluations.error_code` (CHECK-constrained) and `warnings` (JSONB), so failures can be explained like resumes, JDs and profiles. Applied to your database; no drift.
+
+**New modules (`app/services/evaluation/`)**
+- `skills.py`: skill-key normalisation with aliases; platform language labels (`GNU C++17` → `c++`); Codeforces tags; whole-word mention matching ("Java" never matches "JavaScript").
+- `redact.py`: removes the candidate's name and its parts, platform usernames, e-mails, URLs and phone numbers (9+ digits, so year ranges survive).
+- `experience.py`: non-overlapping month intervals from free-text dates ("Jan 2021 - Present", "2019 - 2020", "03/2020"); internships excluded; unknown is `null`.
+- `evidence.py`: the identity-redacted bundle (R/G/C/L ids, trust levels). Institution, grade, location, contact details, GitHub bio/company and follower counts are omitted. READMEs are not sent.
+- `matching.py`: requirements from the reviewed (or extracted) JD; baseline evidence per skill by trust; qualifications that repeat other requirements are not counted twice.
+- `assessment.py`: prompt (`eval-v2`) with verdict definitions, trust rules, fairness and untrusted-data rules; strict `LLMAssessment` schema; one corrective retry on missing or unknown ids; deterministic guards.
+- `scoring.py`: the backend score, coverage threshold, label, unmet and unevidenced required items.
+- `processor.py`: background pipeline; records every outcome.
+- `app/api/v1/evaluations.py`: create, get, list, rerun, delete.
+- Frontend:
+  - `lib/evaluations.ts`;
+  - `components/evaluation/EvaluationWorkspace.tsx` and `EvaluationResultView.tsx`;
+  - the `/evaluations` page and **Evaluate** navigation link.
+
+**Defects found and fixed during the phase**
+1. **Phone pattern ate date ranges** ("2019 - 2022"); the redactor now requires 9+ digits. Found while writing the redactor.
+2. **Retry quality compared by message count**, not by missing ids. A retry missing six verdicts tied with one missing one; it now compares severity. Found by a test.
+3. **A failed corrective retry discarded a usable first reply**; the first reply is now kept, with a warning. Found by a test.
+4. **Score returned as a string** (`"69.20"`, database decimal); it is now a number. Found by a live test.
+5. **The model's summary contradicted its verdicts** ("meets all required skills" with an unproven required skill). Fixed with a prompt rule, the UI labels the summary as model-written, and `unevidenced_required` lists unproven required items. Found by the real-Groq check.
+6. **Double-counted requirements**: the real JD parse repeated skills, experience and education as qualifications. They are now detected by source quote or by restating required skills. Found by the real end-to-end run.
+7. Lint fixes (literal dash characters replaced by `chr()` constants, long lines) and one unused `type: ignore`.
+
+**Noted, not a defect:** a "500 on JD delete" in a live test came from my harness not creating JD storage; the endpoint correctly returns 409.
+
+**Not done (by instruction):** interview questions, recruiter reports, other platforms, authentication.
+
+---
+
+## Maintenance: Groq model retired · 2026-11-14
+
+**Symptom (reported).** After a `GROQ_API_KEY` was added, resume parsing failed with `llm_error` / "LLM provider returned HTTP 404".
+
+**Diagnosis.** The key is valid (`GET /models` returned 200). The default model `llama-3.3-70b-versatile` is not offered to this key: Groq answered `404 model_not_found`. The chat models available were `openai/gpt-oss-120b`, `openai/gpt-oss-20b` and `qwen/qwen3.8-27b`. All three returned valid JSON in JSON mode for an extraction prompt.
+
+**Fix.**
+- The Groq default is now `openai/gpt-oss-120b` (largest available; 0.7 s in the check).
+- A provider 404 now produces an actionable message that names the model and says to set `LLM_MODEL` (the key is never included). A test covers it.
+- `.env.example` lists the verified models.
+
+**Result.** The real-provider tests `test_real_resume_structuring` and `test_real_jd_structuring` passed (2/2) against Groq. **Phases 1A and 1B are now complete.**
+
+---
+
 ## Phase 4: LeetCode Feasibility and Safe Implementation · 2026-11-13
 
 **Status:** ✅ Complete and verified **as a manual, self-reported evidence workflow**. No LeetCode API is used, because no official or permitted one exists. No real LeetCode API test was run, and none is claimed.

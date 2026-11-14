@@ -135,7 +135,7 @@ Non-secret report used by the frontend to explain limitations before upload. API
 
 ```json
 {
-  "llm": { "configured": false, "provider": "groq", "model": "llama-3.3-70b-versatile" },
+  "llm": { "configured": false, "provider": "groq", "model": "openai/gpt-oss-120b" },
   "ocr": { "enabled": true, "available": true, "language": "eng" },
   "resume": { "max_bytes": 10485760, "max_pages": 30, "accepted_extensions": [".pdf", ".docx"] }
 }
@@ -710,6 +710,103 @@ There are **no** `/sync` or `/retry` endpoints for LeetCode.
 
 ---
 
+## Evaluations (Phase 5): is a candidate suitable for a job description?
+
+The evaluation compares a candidate's evidence with a parsed JD:
+1. A **deterministic evidence bundle** and **requirement matching**.
+2. An **LLM verdict per requirement** that must cite evidence ids.
+3. **Backend guards**.
+4. A **backend-computed score**.
+
+Personal details are removed before the LLM call. Work runs in the background.
+
+### `POST /api/v1/evaluations` → 202
+
+Body: `{"candidate_id": uuid, "job_description_id": uuid, "resume_id": uuid | omitted}` (unknown
+keys rejected). Without `resume_id`, the candidate's most recent parsed resume is used (or none).
+Linked GitHub / Codeforces snapshots and LeetCode self-reported evidence are always included.
+
+| Status | `error.code` | When |
+|---|---|---|
+| 404 | `not_found` | Unknown candidate or JD |
+| 409 | `jd_not_parsed` | JD not parsed (or unreadable) |
+| 409 | `resume_not_parsed` | The given resume is not parsed |
+| 409 | `evaluation_in_progress` | Same candidate + JD already running (< 10 min); `details[0].evaluation_id` |
+| 422 | `invalid_resume` / `validation_error` | Resume missing or belongs to another candidate / bad body |
+| 503 | `llm_not_configured` / `database_unavailable` | |
+
+### `GET /api/v1/evaluations/{id}`
+
+`EvaluationResponse`:
+
+| Field | Meaning |
+|---|---|
+| `id`, `candidate_id`, `job_description_id`, `resume_id` | What was evaluated |
+| `status` | `pending` / `running` / `completed` / `failed` |
+| `overall_score` | Number 0–100, or **null** (not scored yet, or too little evidence); never 0 by default |
+| `fit_label` | `strong` / `moderate` / `weak` / `insufficient_evidence` |
+| `job_title`, `model_name`, `created_at`, `completed_at` | |
+| `error_code`, `error_message` | `source_missing`, `jd_not_parsed`, `jd_has_no_requirements`, `no_evidence`, `llm_not_configured`, `llm_auth_failed`, `llm_timeout`, `llm_rate_limited`, `llm_error`, `llm_invalid_response`, `internal_error` |
+| `warnings[]` | Adjusted verdicts, verdicts to review, missing resume, truncated requirements, retries |
+| `result` | `EvaluationResult` (below) when completed |
+
+`EvaluationResult`:
+
+| Field | Content |
+|---|---|
+| `jd_version` | `reviewed` (human-corrected) or `extracted` |
+| `sources[]` | Per source (`resume`, `github`, `codeforces`, `leetcode`): `used` / `not_linked` / `not_collected` / `unavailable`, with a note. Not linked is not evidence of missing skills |
+| `evidence[]` | `{id, source, trust, kind, text, skills, source_url}`. Ids: `R*` resume, `G*` GitHub, `C*` Codeforces, `L*` LeetCode. Trust: `platform_collected`, `resume_claim`, `self_reported`. `text` is identity-redacted; `source_url` is **not** sent to the LLM |
+| `experience` | `{years, entries_used, entries_unparsed, method}`: non-overlapping work-experience months from resume dates (internships excluded); `years: null` = unknown |
+| `requirements[]` | `{id (Q*), kind (required/preferred), type (skill/experience/education/qualification), text, baseline_status, baseline_evidence_ids, verdict, evidence_ids, rationale, weight, credit, adjusted}` |
+| `score` | `{overall, fit_label, coverage, required_met, required_total, preferred_met, preferred_total, unmet_required[], unevidenced_required[], method}` |
+| `strengths[]`, `discrepancies[]` | `{text, evidence_ids}` |
+| `gaps[]` | `{text, requirement_ids}` |
+| `summary` | Model-written; may contain mistakes, the requirement verdicts are authoritative |
+| `privacy` | `identity_removed`, `source_urls_sent_to_llm: false`, redaction counts (never the values) |
+| `decision_support_notice`, `prompt_version` | |
+
+**Requirements scored:** required and preferred skills (alias-normalised, duplicates merged),
+minimum (required) and preferred experience, education (required only when the JD marks it
+mandatory), and required qualifications that do not repeat another requirement.
+Responsibilities are context only; soft skills are not scored.
+
+**Baseline** (`baseline_status`, deterministic): `platform_evidence`, `resume_claim_only`,
+`self_reported_only`, `no_evidence`; `not_applicable` for non-skill requirements.
+
+**Verdicts and guards:**
+- `met` / `partially_met` must cite existing evidence, otherwise they become `insufficient_evidence`.
+- `not_met` must cite the evidence that shows it, otherwise it becomes `insufficient_evidence`.
+- Missing verdicts become `insufficient_evidence`.
+- Unknown ids are removed.
+- A `not_met` verdict on a skill with platform evidence produces a review warning.
+- Every change is recorded in `adjusted`.
+
+**Score** (`score.method`):
+- Weights: required 2, preferred 1.
+- Points: met 1, partial 0.5, not met 0, insufficient 0.
+- A met or partial verdict backed **only** by self-reported evidence counts ×0.75.
+- `overall = 100 × credit / total weight`.
+- Coverage below 50% gives `overall: null`.
+- Labels: Strong ≥ 75, Moderate ≥ 50, otherwise Weak. Capped at Moderate when a required item is not met.
+
+### `GET /api/v1/evaluations?candidate_id=&job_description_id=&limit=50&offset=0`
+
+Newest first; `{items: EvaluationSummary[], total, limit, offset}` (summaries omit `result` and
+`warnings`). `limit` 1–200.
+
+### `POST /api/v1/evaluations/{id}/rerun` → 202
+
+Runs again with the current evidence (and the latest parsed resume if the original was
+deleted). 409 `evaluation_in_progress` while running; 503 `llm_not_configured`.
+
+### `DELETE /api/v1/evaluations/{id}` → 204
+
+A JD cannot be deleted while evaluations reference it (409 `job_description_in_use`).
+Deleting a candidate deletes their evaluations.
+
+---
+
 ## Domain schemas not yet exposed
 
 `app/schemas/domain.py` also defines contracts for later phases. **No endpoint uses these yet:**
@@ -719,7 +816,7 @@ There are **no** `/sync` or `/retry` endpoints for LeetCode.
 | `JobDescriptionCreate` | input | `title` 1-300 characters, `description_text` 1-100,000 characters, `company` optional, `source_url` absolute http(s) only |
 | `DeveloperProfileCreate` (generic; GitHub and Codeforces use `GitHubProfileCreate` / `CodeforcesProfileCreate`) | input | `platform` one of github, leetcode, hackerrank, codeforces, codechef, kaggle; `username` matches `[A-Za-z0-9._-]`, 1-100 characters, starting with a letter or digit; `profile_url` http(s) only |
 | `DeveloperProfileRead` | output | `ownership_status`, `collection_status`, provenance (`source_url`, `collected_at`) |
-| `EvaluationRead` | output | `status`, `overall_score` null or 0-100 (null means not scored, never 0), `result`, `model_name` |
+| `EvaluationRead` (superseded by `EvaluationResponse`, Phase 5) | output | `status`, `overall_score` null or 0-100 (null means not scored, never 0), `result`, `model_name` |
 
 ## Endpoints planned for later phases
 

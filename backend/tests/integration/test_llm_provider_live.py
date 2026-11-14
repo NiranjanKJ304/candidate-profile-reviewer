@@ -63,3 +63,37 @@ async def test_real_jd_structuring(client: ChatCompletionClient) -> None:
     assert data.minimum_experience is not None
     assert data.minimum_experience.years_min == 5
     assert result.model
+
+
+async def test_real_candidate_evaluation(client: ChatCompletionClient) -> None:
+    """Phase 5: real LLM verdicts over an identity-redacted synthetic evidence bundle."""
+    from app.core.enums import Verdict
+    from app.services.evaluation.assessment import EvaluationAssessor
+    from app.services.evaluation.evidence import PlatformInput, build_bundle
+    from app.services.evaluation.matching import build_requirements, match
+    from app.services.evaluation.scoring import score
+    from tests import evaluation_fakes as ef
+    from tests import github_fakes as gf
+
+    bundle = build_bundle(
+        resume=ef.parsed_resume(),
+        github=await ef.github_snapshot(),
+        codeforces=None,
+        leetcode=None,
+        platform_status={"github": PlatformInput("used")},
+        identifiers=[gf.LOGIN],
+    )
+    jd = ef.parsed_jd()
+    reqs, _ = build_requirements(jd)
+    outcome = await EvaluationAssessor(client, max_attempts=2).assess(
+        jd, match(reqs, bundle.items), bundle.items, bundle.sources, bundle.experience
+    )
+    verdicts = {r.text: r.verdict for r in outcome.requirements}
+    assert len(outcome.requirements) == len(reqs)
+    assert verdicts["Python"] in (Verdict.MET, Verdict.PARTIALLY_MET)  # resume + GitHub evidence
+    assert verdicts["Rust"] is not Verdict.MET  # no Rust evidence anywhere
+    valid = {i.id for i in bundle.items}
+    assert all(set(r.evidence_ids) <= valid for r in outcome.requirements)
+    assert outcome.summary
+    breakdown = score(outcome.requirements)
+    assert breakdown.fit_label in ("strong", "moderate", "weak", "insufficient_evidence")

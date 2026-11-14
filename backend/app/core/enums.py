@@ -135,3 +135,36 @@ class EvaluationStatus(StrEnum):
     RUNNING = "running"
     COMPLETED = "completed"
     FAILED = "failed"
+
+
+class EvaluationErrorCode(StrEnum):
+    """Why an evaluation failed (stored on the evaluation). LLM codes match ResumeErrorCode."""
+
+    SOURCE_MISSING = "source_missing"  # candidate, JD or resume deleted meanwhile
+    JD_NOT_PARSED = "jd_not_parsed"
+    JD_HAS_NO_REQUIREMENTS = "jd_has_no_requirements"
+    NO_EVIDENCE = "no_evidence"  # no parsed resume and no platform evidence
+    LLM_NOT_CONFIGURED = "llm_not_configured"
+    LLM_AUTH_FAILED = "llm_auth_failed"
+    LLM_TIMEOUT = "llm_timeout"
+    LLM_RATE_LIMITED = "llm_rate_limited"
+    LLM_ERROR = "llm_error"
+    LLM_INVALID_RESPONSE = "llm_invalid_response"
+    INTERNAL_ERROR = "internal_error"
+
+
+class Verdict(StrEnum):
+    """LLM verdict for one job requirement."""
+
+    MET = "met"
+    PARTIALLY_MET = "partially_met"
+    NOT_MET = "not_met"
+    INSUFFICIENT_EVIDENCE = "insufficient_evidence"  # never treated as "not met"
+
+
+class EvidenceTrust(StrEnum):
+    """How much an evidence item can be relied on."""
+
+    PLATFORM_COLLECTED = "platform_collected"  # official platform API (ownership unverified)
+    RESUME_CLAIM = "resume_claim"  # stated in the candidate's resume
+    SELF_REPORTED = "self_reported"  # manually entered, not verifiable (e.g. LeetCode)

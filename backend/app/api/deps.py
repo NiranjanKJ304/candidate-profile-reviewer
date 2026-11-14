@@ -12,6 +12,7 @@ from app.db.session import get_session
 from app.integrations.codeforces import CodeforcesClient
 from app.integrations.github import GitHubClient
 from app.services.codeforces.sync import CodeforcesSyncService
+from app.services.evaluation.processor import EvaluationProcessor
 from app.services.github.sync import GitHubSyncService
 from app.services.job_description.processor import JobDescriptionProcessor
 from app.services.resume.processor import ResumeProcessor
@@ -58,6 +59,11 @@ def get_codeforces_client(request: Request) -> CodeforcesClient:
     return client
 
 
+def get_evaluation_processor(request: Request) -> EvaluationProcessor:
+    processor: EvaluationProcessor = request.app.state.evaluation_processor
+    return processor
+
+
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 SettingsDep = Annotated[Settings, Depends(get_settings)]
 ProcessorDep = Annotated[ResumeProcessor, Depends(get_resume_processor)]
@@ -68,3 +74,4 @@ GitHubSyncDep = Annotated[GitHubSyncService, Depends(get_github_sync)]
 GitHubClientDep = Annotated[GitHubClient, Depends(get_github_client)]
 CodeforcesSyncDep = Annotated[CodeforcesSyncService, Depends(get_codeforces_sync)]
 CodeforcesClientDep = Annotated[CodeforcesClient, Depends(get_codeforces_client)]
+EvaluationProcessorDep = Annotated[EvaluationProcessor, Depends(get_evaluation_processor)]

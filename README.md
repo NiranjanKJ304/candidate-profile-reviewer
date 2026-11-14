@@ -13,6 +13,7 @@ missing evidence, skill gaps and targeted interview questions.
 > - Phase 2 (GitHub developer profiles) is complete and verified against the real GitHub API.
 > - Phase 3 (Codeforces developer profiles) is complete and verified against the real Codeforces API.
 > - Phase 4 (LeetCode) is complete as a **manual, self-reported evidence** workflow. LeetCode has no permitted API, so it is never contacted.
+> - Phase 5 (candidate–JD evaluation) is complete: open `/evaluations` to see whether a candidate suits a job.
 > - Other platforms, aggregation, scoring and reports are not started.
 >
 > **Docker is not used**: everything runs against natively installed services.
@@ -24,7 +25,7 @@ missing evidence, skill gaps and targeted interview questions.
 .
 ├── backend/              FastAPI service (Python 3.12, uv)
 │   ├── app/              application package (see ARCHITECTURE.md)
-│   ├── alembic/          database migrations (0001-0005)
+│   ├── alembic/          database migrations (0001-0006)
 │   └── tests/            unit/ and integration/ tests
 ├── frontend/             Next.js 16 + TypeScript + Tailwind CSS 4
 ├── scripts/              setup-local-db.ps1, integration-test.ps1
@@ -91,6 +92,14 @@ LeetCode publishes no official API, and its [Terms of Service](https://leetcode.
 
 Everything is labelled **self-reported and not verified** in the API, the database (stored apart from platform-collected evidence) and the UI. There is no sync. Endpoints: [API_DOCUMENTATION.md](API_DOCUMENTATION.md#leetcode-profiles-phase-4-manual-self-reported-evidence-only).
 
+### Evaluate a candidate against a job description (Phase 5)
+
+1. Parse a resume (`/resumes`) and a JD (`/job-descriptions`). Optionally link GitHub, Codeforces and LeetCode on `/candidates`.
+2. `cd backend; uv run alembic upgrade head` (migration `0006_evaluation_errors`).
+3. Open http://localhost:3000/evaluations (**Evaluate** in the navigation), choose the candidate and the JD, and click **Evaluate**.
+
+You get a 0–100 score and fit label, a verdict per requirement (met / partially met / not met / not enough evidence) with the evidence behind it, unproven required items, strengths, gaps and discrepancies. The LLM (`openai/gpt-oss-120b` on Groq) gives the verdicts; the backend computes the score and enforces the rules: no verdict without evidence, and missing evidence never counts as "not met". Personal details are removed before anything is sent to the LLM. The result supports a recruiter's decision; it does not make one. Endpoints: [API_DOCUMENTATION.md](API_DOCUMENTATION.md#evaluations-phase-5-is-a-candidate-suitable-for-a-job-description).
+
 ### Real-provider LLM tests
 
 When `GROQ_API_KEY` is set in `backend/.env`, `scripts\integration-test.ps1` also runs `tests/integration/test_llm_provider_live.py` against Groq. These tests cost tokens; without a key they are skipped.
@@ -133,7 +142,7 @@ It is safe to re-run. Memurai needs no setup: by default it listens only on `127
 ```powershell
 cd backend
 uv sync                                  # creates backend/.venv with Python 3.12
-uv run alembic upgrade head              # applies migrations 0001-0005
+uv run alembic upgrade head              # applies migrations 0001-0006
 uv run uvicorn app.main:create_app --factory --reload --port 8000
 ```
 
@@ -150,7 +159,7 @@ fails immediately with a validation error.
 ```powershell
 cd backend
 uv run alembic upgrade head      # apply all migrations
-uv run alembic current           # show the applied revision (expect 0005_self_reported_evidence)
+uv run alembic current           # show the applied revision (expect 0006_evaluation_errors)
 uv run alembic check             # fails if the models and the database differ
 uv run alembic downgrade base    # drop everything (development only)
 uv run alembic upgrade head --sql   # print the SQL without a database
@@ -188,9 +197,9 @@ cd backend
 uv run ruff format --check .
 uv run ruff check .
 uv run mypy
-uv run pytest --cov                      # 976 unit tests (no services or network needed)
+uv run pytest --cov                      # 1,073 unit tests (no services or network needed)
 
-# Backend live tests: 113 tests (services, migrations, resume/JD/GitHub/Codeforces/LeetCode workflows;
+# Backend live tests: 129 tests (services, migrations, resume/JD/platform/evaluation workflows;
 # real LLM/GitHub/Codeforces tests are opt-in: add -GitHubLive and/or -CodeforcesLive).
 # Reads backend/.env. Migrations run in a random temporary schema that is dropped afterwards,
 # so your existing tables are never touched.
